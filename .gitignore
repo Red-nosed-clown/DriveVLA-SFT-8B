@@ -1,0 +1,39 @@
+# Python 运行缓存
+__pycache__/
+*.py[cod]
+.venv/
+
+# 本地数据由转换脚本重新生成，其中包含不可迁移的绝对图片路径。
+data/nuscenes_vla_sft/*.json
+data/nuscenes_vla_sft/*.jsonl
+!data/nuscenes_vla_sft/summary.json
+
+# LLaMA-Factory 按 README 中固定的提交单独克隆，不嵌入本仓库。
+third_party/LLaMA-Factory/
+
+# 训练权重、checkpoint、optimizer 和完整预测均不上传 GitHub。
+results/**
+
+# 保留小型、可审阅的真实实验报告。
+!results/base_eval_report.md
+!results/base_failure_analysis.md
+!results/base_metrics.json
+!results/base_vs_qlora.md
+!results/finetuned_eval_report.md
+!results/finetuned_failure_analysis.md
+!results/finetuned_metrics.json
+
+# 保留正式训练曲线，不上传 adapter 和 checkpoint。
+!results/qwen3vl_8b_drivevla_qlora/
+results/qwen3vl_8b_drivevla_qlora/**
+!results/qwen3vl_8b_drivevla_qlora/training_loss.png
+!results/qwen3vl_8b_drivevla_qlora/training_eval_loss.png
+
+# README 使用一张代表性轨迹图，其余批量图片留在本机。
+!results/figures/
+results/figures/**
+!results/figures/finetuned/
+results/figures/finetuned/**
+!results/figures/finetuned/019_acf9fcbeb1e346b98640f694f15460e8.png
+
+*.log

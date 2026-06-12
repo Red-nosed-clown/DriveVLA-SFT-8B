@@ -1,0 +1,13 @@
+{
+  "model": "qlora",
+  "num_samples": 34,
+  "parse_success_rate": 1.0,
+  "action_accuracy": 0.47058823529411764,
+  "risk_accuracy": 0.7941176470588235,
+  "trajectory_valid_rate": 1.0,
+  "ade": 2.9181171061584945,
+  "fde": 5.508136142004774,
+  "trajectory_metric_samples": 34,
+  "average_reason_length": 27.294117647058822,
+  "failure_count": 25
+}

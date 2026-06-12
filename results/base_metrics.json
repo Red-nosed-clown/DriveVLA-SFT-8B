@@ -1,0 +1,13 @@
+{
+  "model": "base",
+  "num_samples": 34,
+  "parse_success_rate": 0.0,
+  "action_accuracy": 0.0,
+  "risk_accuracy": 0.0,
+  "trajectory_valid_rate": 1.0,
+  "ade": 5.725870738296742,
+  "fde": 9.7329952142502,
+  "trajectory_metric_samples": 34,
+  "average_reason_length": 36.55882352941177,
+  "failure_count": 34
+}
