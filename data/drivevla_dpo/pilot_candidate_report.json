@@ -1,0 +1,21 @@
+{
+  "source_path": "/home/pc/DriveVLA-SFT-8B/data/nuscenes_vla_sft_trainval_v5_history/train.jsonl",
+  "seed": 42,
+  "target_counts": {
+    "KEEP_LANE": 103,
+    "SLOW_DOWN": 154,
+    "STOP": 51,
+    "TURN_LEFT": 102,
+    "TURN_RIGHT": 102
+  },
+  "selected_samples": 512,
+  "selected_scenes": 356,
+  "action_counts": {
+    "KEEP_LANE": 103,
+    "SLOW_DOWN": 154,
+    "STOP": 51,
+    "TURN_LEFT": 102,
+    "TURN_RIGHT": 102
+  },
+  "all_images_exist": true
+}

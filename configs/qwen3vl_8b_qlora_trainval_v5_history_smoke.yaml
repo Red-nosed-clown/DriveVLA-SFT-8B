@@ -1,0 +1,58 @@
+### model
+model_name_or_path: Qwen/Qwen3-VL-8B-Instruct
+image_max_pixels: 131072
+trust_remote_code: true
+upcast_layernorm: true
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_rank: 8
+lora_alpha: 16
+lora_dropout: 0.05
+lora_target: all
+freeze_vision_tower: true
+freeze_multi_modal_projector: true
+
+### quantization
+quantization_bit: 4
+quantization_method: bitsandbytes
+
+### dataset
+dataset: drivevla_trainval_v5_history_train
+eval_dataset: drivevla_trainval_v5_history_val
+dataset_dir: /home/pc/DriveVLA-SFT-7B/third_party/LLaMA-Factory/data
+template: qwen3_vl_nothink
+cutoff_len: 1024
+max_samples: 32
+overwrite_cache: true
+preprocessing_num_workers: 2
+dataloader_num_workers: 1
+
+### output
+output_dir: /home/pc/DriveVLA-SFT-7B/results/qwen3vl_8b_drivevla_trainval_v5_history_smoke
+logging_steps: 1
+save_steps: 2
+save_total_limit: 1
+plot_loss: true
+overwrite_output_dir: true
+save_only_model: false
+report_to: none
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 2
+learning_rate: 1.0e-4
+max_steps: 2
+lr_scheduler_type: cosine
+warmup_ratio: 0.0
+bf16: true
+fp16: false
+tf32: true
+gradient_checkpointing: true
+ddp_timeout: 180000000
+
+### eval
+per_device_eval_batch_size: 1
+eval_strategy: "no"

@@ -1,0 +1,13 @@
+{
+  "model": "qlora_v5_dpo_pilot_isolated",
+  "num_samples": 200,
+  "parse_success_rate": 1.0,
+  "action_accuracy": 0.64,
+  "risk_accuracy": 0.975,
+  "trajectory_valid_rate": 1.0,
+  "ade": 0.8477103587932099,
+  "fde": 1.8796605097455756,
+  "trajectory_metric_samples": 200,
+  "average_reason_length": 29.29,
+  "failure_count": 73
+}

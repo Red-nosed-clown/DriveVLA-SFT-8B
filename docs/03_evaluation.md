@@ -25,9 +25,16 @@
 - Trajectory Valid：能得到 6 个有限二维点的比例。
 - ADE：六个对应轨迹点欧氏距离的平均值。
 - FDE：第六个轨迹点的欧氏距离。
+- Trajectory Curvature：六点轨迹的二阶差分均值，用于判断轨迹是否过度直线化。
+- Abs Final Lateral：最后一个轨迹点横向位移绝对值，用于观察转向幅度是否偏保守。
 
 ADE/FDE 只在成功解析出有效六点轨迹的样本上计算，因此报告同时记录
 `trajectory_metric_samples`，避免只看距离而忽略格式失败。
+
+ADE/FDE 对轨迹形状不够敏感：如果模型输出一条平滑直线，只要整体距离接近 GT，
+ADE/FDE 仍可能不差。因此 trainval 阶段新增
+[`scripts/analyze_trajectory_geometry.py`](../scripts/analyze_trajectory_geometry.py)，
+专门分析预测轨迹是否过度平滑或直线化。
 
 ## 命令模板
 
@@ -70,3 +77,43 @@ Base 的 34 条输出都包含六点轨迹，但 Action/Risk 使用中文自由�
 - `results/base_vs_qlora.md`
 - `results/predictions_base_parsed.jsonl`
 - `results/predictions_finetuned_parsed.jsonl`
+
+## Trainval 完整验证结果
+
+第二阶段使用 `data/nuscenes_vla_sft_trainval/val.jsonl` 的 2319 条验证样本评估
+trainval QLoRA adapter：
+
+| Metric | Value |
+|---|---:|
+| Parse Success | 99.83% |
+| Action Accuracy | 80.42% |
+| Risk Accuracy | 95.34% |
+| Trajectory Valid | 99.83% |
+| ADE | 2.2574 m |
+| FDE | 3.9219 m |
+
+分动作准确率：
+
+| Action | Correct / Total | Accuracy |
+|---|---:|---:|
+| KEEP_LANE | 1220 / 1348 | 90.50% |
+| TURN_LEFT | 193 / 284 | 67.96% |
+| TURN_RIGHT | 184 / 257 | 71.60% |
+| SLOW_DOWN | 8 / 63 | 12.70% |
+| STOP | 260 / 367 | 70.84% |
+
+轨迹几何分析：
+
+| Source | Mean Curvature | P50 | P90 | P99 |
+|---|---:|---:|---:|---:|
+| GT | 0.2023 | 0.1749 | 0.4142 | 0.7367 |
+| Prediction | 0.1085 | 0.1004 | 0.2225 | 0.3735 |
+
+结论是：trainval 训练解决了 mini 阶段的动作塌缩，模型已经能预测左右转；但预测
+轨迹弯曲度只有 GT 的约一半，说明连续轨迹仍存在过度平滑和直线化。
+
+结果文件：
+
+- `results/trainval_finetuned_full_summary.md`
+- `results/trainval_finetuned_full_eval_report.md`
+- `results/trainval_finetuned_full_trajectory_geometry.md`

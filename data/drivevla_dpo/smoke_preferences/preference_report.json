@@ -1,0 +1,24 @@
+{
+  "input_predictions": 32,
+  "eligible_pairs": 19,
+  "train_pairs": 15,
+  "val_pairs": 4,
+  "train_scenes": 15,
+  "val_scenes": 4,
+  "scene_overlap": 0,
+  "category_counts": {
+    "other_action_error": 1,
+    "slow_keep_confusion": 3,
+    "stop_confusion": 2,
+    "trajectory_error": 6,
+    "turn_geometry": 7
+  },
+  "ground_truth_action_counts": {
+    "KEEP_LANE": 3,
+    "SLOW_DOWN": 6,
+    "TURN_LEFT": 5,
+    "TURN_RIGHT": 5
+  },
+  "mean_preference_margin": 0.3350261052631579,
+  "all_images_exist": true
+}

@@ -1,0 +1,62 @@
+### model
+model_name_or_path: /home/pc/DriveVLA-SFT-7B/results/qwen3vl_8b_drivevla_v5_history_sft_merged
+image_max_pixels: 196608
+trust_remote_code: true
+upcast_layernorm: true
+
+### method
+stage: dpo
+do_train: true
+finetuning_type: lora
+create_new_adapter: true
+lora_rank: 16
+lora_alpha: 32
+lora_dropout: 0.05
+lora_target: all
+freeze_vision_tower: true
+freeze_multi_modal_projector: true
+pref_loss: sigmoid
+pref_beta: 0.1
+pref_ftx: 0.05
+dpo_label_smoothing: 0.05
+
+### quantization
+quantization_bit: 4
+quantization_method: bitsandbytes
+
+### dataset
+dataset: drivevla_v5_dpo_train
+eval_dataset: drivevla_v5_dpo_val
+dataset_dir: /home/pc/DriveVLA-SFT-7B/third_party/LLaMA-Factory/data
+template: qwen3_vl_nothink
+cutoff_len: 2048
+overwrite_cache: true
+preprocessing_num_workers: 4
+dataloader_num_workers: 2
+
+### output
+output_dir: /home/pc/DriveVLA-SFT-7B/results/qwen3vl_8b_drivevla_v5_dpo_pilot
+logging_steps: 5
+save_strategy: epoch
+save_total_limit: 1
+plot_loss: true
+overwrite_output_dir: true
+save_only_model: false
+report_to: none
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 4
+learning_rate: 5.0e-6
+num_train_epochs: 1.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.05
+bf16: true
+fp16: false
+tf32: true
+gradient_checkpointing: true
+ddp_timeout: 180000000
+
+### eval
+per_device_eval_batch_size: 1
+eval_strategy: epoch

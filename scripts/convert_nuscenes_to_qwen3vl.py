@@ -106,6 +106,31 @@ def collect_future_samples(
     return future_samples
 
 
+def collect_previous_samples(
+    sample: dict[str, Any],
+    sample_by_token: dict[str, dict[str, Any]],
+    history_steps: int,
+) -> list[dict[str, Any]] | None:
+    """沿 sample.prev 收集历史关键帧，并按时间从旧到新返回。
+
+    v5 需要让模型看到“过去一小段时间自车怎么运动”。如果 scene 开头历史不足，
+    直接跳过该样本，避免有的样本带历史、有的样本不带历史导致 prompt 分布混乱。
+    """
+    if history_steps <= 0:
+        return []
+
+    previous_samples: list[dict[str, Any]] = []
+    current = sample
+    for _ in range(history_steps):
+        previous_token = current.get("prev", "")
+        if not previous_token:
+            return None
+        current = sample_by_token[previous_token]
+        previous_samples.append(current)
+    previous_samples.reverse()
+    return previous_samples
+
+
 def build_future_trajectory(
     current_pose: dict[str, Any],
     future_poses: list[dict[str, Any]],
@@ -134,8 +159,105 @@ def trajectory_path_length(trajectory: list[list[float]]) -> float:
     )
 
 
-def infer_action_token(trajectory: list[list[float]]) -> str:
-    """根据最终轨迹点生成简化驾驶动作标签。"""
+def trajectory_step_distances(trajectory: list[list[float]]) -> list[float]:
+    """计算从自车原点到未来六点之间每一小段的距离。
+
+    这些距离只写入 metadata 和数据报告，不放进 prompt。原因是它们来自未来轨迹，
+    如果直接提供给模型，就等于把答案的一部分泄漏给输入端。
+    """
+    points = [[0.0, 0.0], *trajectory]
+    return [
+        math.hypot(current[0] - previous[0], current[1] - previous[1])
+        for previous, current in zip(points, points[1:])
+    ]
+
+
+def trajectory_motion_stats(trajectory: list[list[float]]) -> dict[str, float]:
+    """提取动作弱标签需要的未来运动统计量。
+
+    初学者提示：
+        action 标签不是人工标注，而是根据 ego pose 轨迹推出来的弱监督标签。
+        把这些中间量保存下来，后面检查标签是否合理时就不用只看最终类别。
+    """
+    final_forward, final_lateral = trajectory[-1]
+    step_distances = trajectory_step_distances(trajectory)
+    path_length = sum(step_distances)
+    first_step = step_distances[0] if step_distances else 0.0
+    last_step = step_distances[-1] if step_distances else 0.0
+    max_abs_lateral = max(abs(point[1]) for point in trajectory) if trajectory else 0.0
+    return {
+        "final_forward_m": round(final_forward, 2),
+        "final_lateral_m": round(final_lateral, 2),
+        "path_length_m": round(path_length, 2),
+        "avg_step_m": round(path_length / len(step_distances), 2) if step_distances else 0.0,
+        "first_step_m": round(first_step, 2),
+        "last_step_m": round(last_step, 2),
+        "step_delta_m": round(last_step - first_step, 2),
+        "max_abs_lateral_m": round(max_abs_lateral, 2),
+    }
+
+
+def normalize_angle(angle_rad: float) -> float:
+    """把角度归一化到 [-pi, pi]，避免跨越 180 度时差值跳变。"""
+    return math.atan2(math.sin(angle_rad), math.cos(angle_rad))
+
+
+def build_history_motion(
+    current_pose: dict[str, Any],
+    history_poses: list[dict[str, Any]],
+    current_timestamp: int,
+    history_timestamps: list[int],
+) -> dict[str, Any]:
+    """根据历史 ego pose 生成可放进 prompt 的自车运动状态。
+
+    这些量只来自当前帧之前的 ego pose，不使用未来轨迹，因此不会把答案泄漏给输入端。
+    初学者可以把它理解为给模型补上“速度表”和“过去 1.5 秒方向盘趋势”的简化版本。
+    """
+    all_poses = [*history_poses, current_pose]
+    all_timestamps = [*history_timestamps, current_timestamp]
+
+    speeds: list[float] = []
+    for previous_pose, current_pose_item, previous_time, current_time in zip(
+        all_poses,
+        all_poses[1:],
+        all_timestamps,
+        all_timestamps[1:],
+    ):
+        dt = max((current_time - previous_time) / 1_000_000.0, 1e-6)
+        dx = current_pose_item["translation"][0] - previous_pose["translation"][0]
+        dy = current_pose_item["translation"][1] - previous_pose["translation"][1]
+        speeds.append(round(math.hypot(dx, dy) / dt, 2))
+
+    current_speed = speeds[-1] if speeds else 0.0
+    if len(speeds) >= 2:
+        elapsed = max((all_timestamps[-1] - all_timestamps[1]) / 1_000_000.0, 1e-6)
+        accel = (speeds[-1] - speeds[0]) / elapsed
+    else:
+        accel = 0.0
+
+    oldest_pose = history_poses[0] if history_poses else current_pose
+    oldest_position_in_current_ego = world_to_ego_xy(current_pose, oldest_pose)
+    history_forward_delta = -oldest_position_in_current_ego[0]
+    history_lateral_delta = -oldest_position_in_current_ego[1]
+    yaw_delta = normalize_angle(
+        yaw_from_quaternion(current_pose["rotation"])
+        - yaw_from_quaternion(oldest_pose["rotation"])
+    )
+
+    return {
+        "history_steps": len(history_poses),
+        "history_duration_s": round((current_timestamp - all_timestamps[0]) / 1_000_000.0, 2),
+        "history_speed_mps": speeds,
+        "current_speed_mps": round(current_speed, 2),
+        "history_accel_mps2": round(accel, 2),
+        "history_yaw_delta_deg": round(math.degrees(yaw_delta), 2),
+        "history_forward_delta_m": round(history_forward_delta, 2),
+        "history_lateral_delta_m": round(history_lateral_delta, 2),
+    }
+
+
+def infer_action_token_legacy(trajectory: list[list[float]]) -> str:
+    """根据最终轨迹点生成 v1 简化驾驶动作标签。"""
     final_forward, final_lateral = trajectory[-1]
     if final_forward < 1.0:
         return "STOP"
@@ -146,6 +268,90 @@ def infer_action_token(trajectory: list[list[float]]) -> str:
     if final_forward < 3.0:
         return "SLOW_DOWN"
     return "KEEP_LANE"
+
+
+def infer_action_token_v2(trajectory: list[list[float]]) -> str:
+    """使用更细的运动统计生成 v2 动作标签。
+
+    v1 的 SLOW_DOWN 只看未来终点是否小于 3 米，容易漏掉“还在前进但明显很慢”
+    的样本。v2 同时看累计路程、平均每段位移和最后一段位移，让低速类样本更容易
+    被标出来。阈值仍是 heuristic 弱监督规则，后续需要用数据报告和失败样本继续调。
+    """
+    stats = trajectory_motion_stats(trajectory)
+    final_forward = stats["final_forward_m"]
+    final_lateral = stats["final_lateral_m"]
+    path_length = stats["path_length_m"]
+    avg_step = stats["avg_step_m"]
+    last_step = stats["last_step_m"]
+    step_delta = stats["step_delta_m"]
+
+    if path_length < 1.2 or final_forward < 1.0:
+        return "STOP"
+    if final_lateral > 1.2:
+        return "TURN_LEFT"
+    if final_lateral < -1.2:
+        return "TURN_RIGHT"
+    if final_forward < 6.0 or avg_step < 1.0 or last_step < 0.8 or step_delta < -0.8:
+        return "SLOW_DOWN"
+    return "KEEP_LANE"
+
+
+def infer_action_token_v3(
+    trajectory: list[list[float]],
+    history_motion: dict[str, Any] | None = None,
+) -> str:
+    """结合未来轨迹和历史速度趋势生成更干净的 v3 动作弱标签。
+
+    v2 的问题是只要未来前向距离偏短，就容易把 KEEP_LANE 标成 SLOW_DOWN。
+    v3 仍然只用规则生成弱标签，但会更强调“速度真的在下降”：
+        1. 明显横向位移先归为转向，避免弯道样本被误标为减速；
+        2. SLOW_DOWN 需要未来步长下降、未来速度偏低，或历史当前速度到未来末段
+           存在明显下降；
+        3. STOP 仍优先处理近乎静止的样本。
+    """
+    stats = trajectory_motion_stats(trajectory)
+    final_forward = stats["final_forward_m"]
+    final_lateral = stats["final_lateral_m"]
+    path_length = stats["path_length_m"]
+    avg_step = stats["avg_step_m"]
+    first_step = stats["first_step_m"]
+    last_step = stats["last_step_m"]
+    step_delta = stats["step_delta_m"]
+
+    if path_length < 1.2 or final_forward < 1.0:
+        return "STOP"
+    if final_lateral > 1.2:
+        return "TURN_LEFT"
+    if final_lateral < -1.2:
+        return "TURN_RIGHT"
+
+    future_avg_speed = avg_step / 0.5
+    future_last_speed = last_step / 0.5
+    future_decelerating = first_step >= 1.5 and step_delta <= -0.9
+    future_low_speed = final_forward < 6.0 and future_avg_speed < 2.8
+    history_to_future_drop = False
+    if history_motion:
+        current_speed = float(history_motion.get("current_speed_mps", 0.0))
+        history_to_future_drop = current_speed >= 3.0 and future_last_speed <= current_speed - 1.2
+
+    if future_low_speed or future_decelerating or history_to_future_drop:
+        return "SLOW_DOWN"
+    return "KEEP_LANE"
+
+
+def infer_action_token(
+    trajectory: list[list[float]],
+    action_rule: str = "legacy",
+    history_motion: dict[str, Any] | None = None,
+) -> str:
+    """按指定规则推断动作标签，默认保持 v1 行为不变。"""
+    if action_rule == "legacy":
+        return infer_action_token_legacy(trajectory)
+    if action_rule == "v2":
+        return infer_action_token_v2(trajectory)
+    if action_rule == "v3":
+        return infer_action_token_v3(trajectory, history_motion)
+    raise ValueError(f"未知动作规则：{action_rule}")
 
 
 def classify_category(category_name: str) -> str:
@@ -229,9 +435,11 @@ def make_record(
     trajectory: list[list[float]],
     object_summary: dict[str, Any],
     future_steps: int,
+    action_rule: str,
+    history_motion: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """构造自写脚本可读的 Qwen3-VL 多模态 SFT 样本。"""
-    action = infer_action_token(trajectory)
+    action = infer_action_token(trajectory, action_rule, history_motion)
     risk, risk_score = infer_risk_level(object_summary["counts"])
     answer = {
         "action": action,
@@ -239,6 +447,13 @@ def make_record(
         "trajectory": trajectory,
         "reason": build_reason(action, risk),
     }
+    history_text = ""
+    if history_motion:
+        history_text = (
+            f"\n历史自车运动：{json.dumps(history_motion, ensure_ascii=False)}"
+            "\n运动提示：历史速度用于判断 KEEP_LANE、SLOW_DOWN 和 STOP；"
+            "未来轨迹点间距应反映速度变化，横向变化应反映道路转向趋势。"
+        )
     prompt = (
         "你是自动驾驶视觉语言动作模型。根据前视相机图像和场景统计，"
         "预测自车未来驾驶动作、启发式风险等级和未来轨迹。"
@@ -248,6 +463,7 @@ def make_record(
         "驾驶指令：安全沿道路行驶。\n"
         f"场景统计：{json.dumps(object_summary['counts'], ensure_ascii=False)}\n"
         f"最近目标：{json.dumps(object_summary['nearest'], ensure_ascii=False)}"
+        f"{history_text}"
     )
     return {
         "id": sample["token"],
@@ -274,6 +490,9 @@ def make_record(
             "risk": risk,
             "risk_score": risk_score,
             "object_counts": object_summary["counts"],
+            "history_motion": history_motion or {},
+            "motion_stats": trajectory_motion_stats(trajectory),
+            "action_rule": action_rule,
         },
     }
 
@@ -308,6 +527,151 @@ def split_by_scene(
     return train_rows, val_rows, train_scenes, val_scenes
 
 
+def balance_training_rows(
+    train_rows: list[dict[str, Any]],
+    seed: int,
+    target_count: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """对训练集做动作均衡采样，验证集不要调用这个函数。
+
+    做法：
+        1. 先按 action 分组；
+        2. 少于目标数量的类别用有放回采样补齐；
+        3. 多于目标数量的类别随机下采样；
+        4. 最后整体打乱。
+
+    为什么只处理训练集：
+        验证集要保留真实分布，否则评估指标会变得好看但不可信。
+    """
+    rng = random.Random(seed)
+    groups: dict[str, list[dict[str, Any]]] = {action: [] for action in VALID_ACTIONS}
+    for row in train_rows:
+        groups[row["metadata"]["action"]].append(row)
+
+    original_distribution = {
+        action: len(groups[action])
+        for action in VALID_ACTIONS
+        if groups[action]
+    }
+    if not original_distribution:
+        return train_rows, {"enabled": False, "reason": "empty_train_rows"}
+
+    if target_count <= 0:
+        # 默认不要把所有类别补到 KEEP_LANE 的数量，否则训练集会膨胀过大。
+        # 这里使用“非 KEEP_LANE 类别里的最大数量”作为目标，既提升少数类权重，
+        # 又能顺手压低 KEEP_LANE 的占比，适合先做短训练对照实验。
+        non_keep_counts = [
+            count
+            for action, count in original_distribution.items()
+            if action != "KEEP_LANE"
+        ]
+        target_count = max(non_keep_counts) if non_keep_counts else max(original_distribution.values())
+
+    balanced_rows: list[dict[str, Any]] = []
+    for action in VALID_ACTIONS:
+        rows = groups[action]
+        if not rows:
+            continue
+        if len(rows) >= target_count:
+            balanced_rows.extend(rng.sample(rows, target_count))
+        else:
+            balanced_rows.extend(rows)
+            balanced_rows.extend(rng.choice(rows) for _ in range(target_count - len(rows)))
+
+    rng.shuffle(balanced_rows)
+    balanced_distribution = Counter(row["metadata"]["action"] for row in balanced_rows)
+    return balanced_rows, {
+        "enabled": True,
+        "mode": "equal_per_action",
+        "target_per_action": target_count,
+        "original_distribution": original_distribution,
+        "balanced_distribution": dict(balanced_distribution),
+    }
+
+
+def parse_action_target_counts(raw_targets: str) -> dict[str, int]:
+    """解析每类 action 的目标采样数量。
+
+    输入示例：
+        ``'{"SLOW_DOWN": 7000, "TURN_LEFT": 3000}'``
+
+    为什么使用 JSON：
+        JSON 比逗号分隔字符串更不容易写错，也方便把真实实验配置原样记录到
+        summary.json 和 README 里。
+    """
+    if not raw_targets:
+        return {}
+    parsed = json.loads(raw_targets)
+    if not isinstance(parsed, dict):
+        raise ValueError("--action-target-counts-json 必须是 JSON 对象")
+
+    targets: dict[str, int] = {}
+    for action, count in parsed.items():
+        if action not in VALID_ACTIONS:
+            raise ValueError(f"未知 action：{action}")
+        if not isinstance(count, int) or count < 0:
+            raise ValueError(f"{action} 的目标数量必须是非负整数")
+        targets[action] = count
+    return targets
+
+
+def sample_training_rows_by_action_targets(
+    train_rows: list[dict[str, Any]],
+    seed: int,
+    target_counts: dict[str, int],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """按每类 action 的目标数量采样训练集，验证集不要调用这个函数。
+
+    和 ``balance_training_rows`` 的区别：
+        ``balance_training_rows`` 会把所有类别采到同一个数量，适合测试强均衡；
+        这个函数只调整用户指定的类别，未指定类别保持原始数量，适合 v4 这种
+        温和采样消融实验。
+    """
+    rng = random.Random(seed)
+    groups: dict[str, list[dict[str, Any]]] = {action: [] for action in VALID_ACTIONS}
+    for row in train_rows:
+        groups[row["metadata"]["action"]].append(row)
+
+    original_distribution = {
+        action: len(groups[action])
+        for action in VALID_ACTIONS
+        if groups[action]
+    }
+    if not original_distribution:
+        return train_rows, {"enabled": False, "reason": "empty_train_rows"}
+
+    final_targets = {
+        action: target_counts.get(action, len(groups[action]))
+        for action in VALID_ACTIONS
+        if groups[action]
+    }
+
+    sampled_rows: list[dict[str, Any]] = []
+    for action in VALID_ACTIONS:
+        rows = groups[action]
+        if not rows:
+            continue
+        target_count = final_targets[action]
+        if target_count <= 0:
+            continue
+        if len(rows) >= target_count:
+            sampled_rows.extend(rng.sample(rows, target_count))
+        else:
+            sampled_rows.extend(rows)
+            sampled_rows.extend(rng.choice(rows) for _ in range(target_count - len(rows)))
+
+    rng.shuffle(sampled_rows)
+    sampled_distribution = Counter(row["metadata"]["action"] for row in sampled_rows)
+    return sampled_rows, {
+        "enabled": True,
+        "mode": "custom_action_targets",
+        "requested_targets": target_counts,
+        "final_targets": final_targets,
+        "original_distribution": original_distribution,
+        "balanced_distribution": dict(sampled_distribution),
+    }
+
+
 def build_report(
     rows: list[dict[str, Any]],
     train_rows: list[dict[str, Any]],
@@ -315,9 +679,14 @@ def build_report(
     train_scenes: set[str],
     val_scenes: set[str],
     skipped: Counter[str],
+    action_rule: str,
+    balance_info: dict[str, Any],
+    history_steps: int,
 ) -> str:
     """生成可直接放入项目文档的数据集统计报告。"""
     action_counts = Counter(row["metadata"]["action"] for row in rows)
+    train_action_counts = Counter(row["metadata"]["action"] for row in train_rows)
+    val_action_counts = Counter(row["metadata"]["action"] for row in val_rows)
     risk_counts = Counter(row["metadata"]["risk"] for row in rows)
     average_path_length = (
         mean(trajectory_path_length(row["ground_truth"]["trajectory"]) for row in rows)
@@ -325,7 +694,7 @@ def build_report(
         else 0.0
     )
     lines = [
-        "# nuScenes-mini VLA 数据报告",
+        "# nuScenes VLA 数据报告",
         "",
         "## 数据概览",
         "",
@@ -335,7 +704,11 @@ def build_report(
         f"- 训练场景：{len(train_scenes)}",
         f"- 验证场景：{len(val_scenes)}",
         f"- 轨迹点数：{len(rows[0]['ground_truth']['trajectory']) if rows else 0}",
+        f"- 动作标签规则：{action_rule}",
+        f"- 历史自车运动步数：{history_steps}",
+        f"- 训练集动作均衡采样：{balance_info.get('enabled', False)}",
         f"- 平均未来轨迹路程：{average_path_length:.2f} 米",
+        f"- scene 开头历史帧不足：{skipped['insufficient_history']}",
         f"- 缺失图片：{skipped['missing_image']}",
         f"- scene 末尾未来帧不足：{skipped['insufficient_future']}",
         f"- 缺失相机关键帧：{skipped['missing_camera']}",
@@ -344,15 +717,35 @@ def build_report(
         "",
     ]
     lines.extend(f"- {name}: {action_counts.get(name, 0)}" for name in VALID_ACTIONS)
+    lines.extend(["", "## 训练集 Action 分布", ""])
+    lines.extend(f"- {name}: {train_action_counts.get(name, 0)}" for name in VALID_ACTIONS)
+    lines.extend(["", "## 验证集 Action 分布", ""])
+    lines.extend(f"- {name}: {val_action_counts.get(name, 0)}" for name in VALID_ACTIONS)
     lines.extend(["", "## Risk 分布", ""])
     lines.extend(f"- {name}: {risk_counts.get(name, 0)}" for name in VALID_RISKS)
+    if balance_info.get("enabled"):
+        lines.extend(
+            [
+                "",
+                "## 训练集均衡采样说明",
+                "",
+                f"- 采样模式：{balance_info.get('mode', 'unknown')}",
+                f"- 每类目标样本数：{balance_info.get('target_per_action', 'custom')}",
+                f"- 自定义目标：{json.dumps(balance_info.get('final_targets', {}), ensure_ascii=False)}",
+                f"- 均衡前：{json.dumps(balance_info['original_distribution'], ensure_ascii=False)}",
+                f"- 均衡后：{json.dumps(balance_info['balanced_distribution'], ensure_ascii=False)}",
+                "- 均衡采样只影响训练文件，验证文件保持 scene split 后的真实分布。",
+            ]
+        )
     lines.extend(
         [
             "",
             "## 标签说明",
             "",
             "- 轨迹由未来 ego pose 转换到当前自车坐标系得到。",
+            "- 历史自车运动只使用当前帧之前的 ego pose，不包含未来答案。",
             "- Risk 是根据交通参与者数量生成的 heuristic 弱监督标签，不是真实人工风险标注。",
+            "- Action 也是由未来 ego pose 生成的 heuristic 弱监督标签，不是真实人工驾驶意图标注。",
             "- 数据按 scene 切分，训练场景与验证场景没有交集。",
             "",
         ]
@@ -395,6 +788,20 @@ def build_dataset(args: argparse.Namespace) -> None:
         if current_camera is None:
             skipped["missing_camera"] += 1
             continue
+        previous_samples = collect_previous_samples(sample, sample_by_token, args.history_steps)
+        if previous_samples is None:
+            skipped["insufficient_history"] += 1
+            continue
+        previous_cameras: list[dict[str, Any]] = []
+        for previous_sample in previous_samples:
+            camera = camera_by_sample.get(previous_sample["token"], {}).get(args.camera)
+            if camera is None:
+                previous_cameras = []
+                break
+            previous_cameras.append(camera)
+        if len(previous_cameras) != args.history_steps:
+            skipped["missing_camera"] += 1
+            continue
         future_samples = collect_future_samples(sample, sample_by_token, args.future_steps)
         if future_samples is None:
             skipped["insufficient_future"] += 1
@@ -417,6 +824,17 @@ def build_dataset(args: argparse.Namespace) -> None:
             continue
 
         current_pose = pose_by_token[current_camera["ego_pose_token"]]
+        history_poses = [pose_by_token[camera["ego_pose_token"]] for camera in previous_cameras]
+        history_motion = (
+            build_history_motion(
+                current_pose,
+                history_poses,
+                current_camera["timestamp"],
+                [camera["timestamp"] for camera in previous_cameras],
+            )
+            if args.history_steps > 0
+            else None
+        )
         future_poses = [pose_by_token[camera["ego_pose_token"]] for camera in future_cameras]
         trajectory = build_future_trajectory(current_pose, future_poses)
         object_summary = summarize_objects(
@@ -434,6 +852,8 @@ def build_dataset(args: argparse.Namespace) -> None:
                 trajectory,
                 object_summary,
                 args.future_steps,
+                args.action_rule,
+                history_motion,
             )
         )
 
@@ -446,6 +866,24 @@ def build_dataset(args: argparse.Namespace) -> None:
     )
     if train_scenes & val_scenes:
         raise RuntimeError("训练场景和验证场景发生重叠")
+
+    raw_train_samples = len(train_rows)
+    balance_info: dict[str, Any] = {"enabled": False}
+    action_target_counts = parse_action_target_counts(args.action_target_counts_json)
+    if args.balance_train and action_target_counts:
+        raise ValueError("--balance-train 和 --action-target-counts-json 不能同时使用")
+    if args.balance_train:
+        train_rows, balance_info = balance_training_rows(
+            train_rows,
+            args.seed,
+            args.balance_target_count,
+        )
+    elif action_target_counts:
+        train_rows, balance_info = sample_training_rows_by_action_targets(
+            train_rows,
+            args.seed,
+            action_target_counts,
+        )
 
     output_dir = Path(args.output_dir)
     dump_jsonl(output_dir / "train.jsonl", train_rows)
@@ -462,12 +900,18 @@ def build_dataset(args: argparse.Namespace) -> None:
         "nuscenes_root": str(root),
         "camera": args.camera,
         "future_steps": args.future_steps,
+        "history_steps": args.history_steps,
+        "action_rule": args.action_rule,
         "train_samples": len(train_rows),
+        "raw_train_samples_before_balance": raw_train_samples,
         "val_samples": len(val_rows),
         "train_scenes": sorted(train_scenes),
         "val_scenes": sorted(val_scenes),
         "action_distribution": dict(Counter(row["metadata"]["action"] for row in rows)),
+        "train_action_distribution": dict(Counter(row["metadata"]["action"] for row in train_rows)),
+        "val_action_distribution": dict(Counter(row["metadata"]["action"] for row in val_rows)),
         "risk_distribution": dict(Counter(row["metadata"]["risk"] for row in rows)),
+        "train_balance": balance_info,
         "average_trajectory_path_length_m": round(
             mean(trajectory_path_length(row["ground_truth"]["trajectory"]) for row in rows),
             2,
@@ -484,6 +928,9 @@ def build_dataset(args: argparse.Namespace) -> None:
         train_scenes,
         val_scenes,
         skipped,
+        args.action_rule,
+        balance_info,
+        args.history_steps,
     )
     (output_dir / "dataset_report.md").write_text(report, encoding="utf-8")
     print(json.dumps(summary, ensure_ascii=False, indent=2))
@@ -501,6 +948,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-samples", "--max_samples", type=int, default=-1)
     parser.add_argument("--max-objects", "--max_objects", type=int, default=8)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--history-steps", "--history_steps", type=int, default=0)
+    parser.add_argument("--action-rule", "--action_rule", choices=("legacy", "v2", "v3"), default="legacy")
+    parser.add_argument("--balance-train", "--balance_train", action="store_true")
+    parser.add_argument("--balance-target-count", "--balance_target_count", type=int, default=0)
+    parser.add_argument("--action-target-counts-json", "--action_target_counts_json", default="")
     return parser.parse_args()
 
 

@@ -1,0 +1,13 @@
+{
+  "model": "qlora_trainval_v5_history_full",
+  "num_samples": 2115,
+  "parse_success_rate": 0.9995271867612293,
+  "action_accuracy": 0.7494089834515366,
+  "risk_accuracy": 0.9531914893617022,
+  "trajectory_valid_rate": 1.0,
+  "ade": 0.6908495972679817,
+  "fde": 1.507149239562896,
+  "trajectory_metric_samples": 2115,
+  "average_reason_length": 25.68888888888889,
+  "failure_count": 606
+}

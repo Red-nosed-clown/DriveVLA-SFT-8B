@@ -1,0 +1,11 @@
+### model
+model_name_or_path: Qwen/Qwen3-VL-8B-Instruct
+adapter_name_or_path: /home/pc/DriveVLA-SFT-7B/results/qwen3vl_8b_drivevla_trainval_v5_history_full
+template: qwen3_vl_nothink
+trust_remote_code: true
+
+### export
+export_dir: /home/pc/DriveVLA-SFT-7B/results/qwen3vl_8b_drivevla_v5_history_sft_merged
+export_size: 5
+export_device: cpu
+export_legacy_format: false
