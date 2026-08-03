@@ -36,6 +36,12 @@ Action、Risk 和连续轨迹。重点不是声称小数据模型可以直接控
 
 ## 已构建数据
 
+项目包含两个数据阶段：`nuScenes-mini` 只用于早期链路验证，后续正式 QLoRA
+实验使用本地 `Full_dataest` 中的 `v1.0-trainval` 数据。以下结果不要混为同一
+规模的数据集。
+
+### nuScenes-mini 链路验证
+
 数据源：`/home/pc/datasets/nuscenes`
 
 | Split | Samples | Scenes |
@@ -49,7 +55,10 @@ Action、Risk 和连续轨迹。重点不是声称小数据模型可以直接控
 完整分布见
 [`data/nuscenes_vla_sft/dataset_report.md`](data/nuscenes_vla_sft/dataset_report.md)。
 
-第二阶段使用本地完整 `trainval` 元数据和可用 `CAM_FRONT` 图像，输出到
+### nuScenes trainval 正式实验
+
+第二阶段使用 `/home/pc/datasets/Full_dataest` 下完整 `trainval` 元数据和本地
+可用的 `CAM_FRONT` 图像，输出到
 `data/nuscenes_vla_sft_trainval`。该目录成功转换 23349 条样本，其中训练集
 21030 条、验证集 2319 条。由于本地数据目录缺少部分 `CAM_FRONT` 图像，转换时
 跳过 5700 条缺图样本；scene 末尾不足未来 6 帧的样本跳过 5100 条。
@@ -336,11 +345,11 @@ adapter。
 
 ## 项目边界
 
-nuScenes-mini 只有 10 个 scene，当前结果用于验证完整工程链路，不代表真实道路
-泛化或闭环控制性能。9:1 scene 划分后的单个验证 scene 不包含 STOP、
-TURN_RIGHT 和 LOW risk，分类结果不能代表这些类别的验证性能。第一版仅使用
-单目 `CAM_FRONT`。CARLA 实验属于仿真闭环验证，且当前只覆盖单一地图、天气
-和有限场景参数，不代表真实车辆性能或完整域泛化。
+nuScenes-mini 只有 10 个 scene，仅用于早期工程链路验证；项目的正式训练与主要
+离线结论来自完整 nuScenes trainval 阶段。两阶段主要使用单目 `CAM_FRONT`，
+且本地 full 数据缺少部分图像，因此不能将结果表述为使用了全部 nuScenes 传感器
+和全部可用样本。CARLA 实验属于仿真闭环验证，目前只覆盖单一地图、天气和有限
+场景参数，不代表真实车辆性能或完整域泛化。
 
 ## 后续方向
 
