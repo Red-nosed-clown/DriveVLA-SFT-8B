@@ -29,6 +29,10 @@ data/nuscenes_vla_sft_trainval_v5_history/*.json
 data/nuscenes_vla_sft_trainval_v5_history/*.jsonl
 !data/nuscenes_vla_sft_trainval_v5_history/summary.json
 !data/nuscenes_vla_sft_trainval_v5_history/dataset_report.md
+data/nuscenes_vla_sft_trainval_v6_safety/*.json
+data/nuscenes_vla_sft_trainval_v6_safety/*.jsonl
+!data/nuscenes_vla_sft_trainval_v6_safety/summary.json
+!data/nuscenes_vla_sft_trainval_v6_safety/dataset_report.md
 
 # DPO 候选、偏好对和绝对图片路径只在本机生成，只保留小型统计报告。
 data/drivevla_dpo/**

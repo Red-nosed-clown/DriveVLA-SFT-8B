@@ -16,6 +16,10 @@ class NearbyActor:
     distance_m: float
     forward_m: float
     lateral_m: float
+    longitudinal_speed_mps: float | None = None
+    relative_longitudinal_speed_mps: float | None = None
+    closing_speed_mps: float | None = None
+    ttc_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -46,18 +50,29 @@ def build_online_prompt(
     nearby_actors: Sequence[NearbyActor],
     ego_motion: EgoMotion,
     navigation_instruction: str = "安全沿道路行驶。",
+    include_object_motion: bool = False,
+    include_speed_target: bool = False,
 ) -> str:
-    """生成与 v5 数据字段和中文措辞一致的在线推理 prompt。"""
+    """生成 v5 prompt，并可按开关加入 v6 动态安全字段。"""
     closest = sorted(nearby_actors, key=lambda actor: actor.distance_m)[:8]
-    closest_json = [
-        {
+    closest_json = []
+    for actor in closest:
+        actor_row = {
             "category": actor.category,
             "distance_m": round(actor.distance_m, 2),
             "forward_m": round(actor.forward_m, 2),
             "lateral_m": round(actor.lateral_m, 2),
         }
-        for actor in closest
-    ]
+        if include_object_motion:
+            actor_row.update(
+                {
+                    "longitudinal_speed_mps": actor.longitudinal_speed_mps,
+                    "relative_longitudinal_speed_mps": actor.relative_longitudinal_speed_mps,
+                    "closing_speed_mps": actor.closing_speed_mps,
+                    "ttc_s": actor.ttc_s,
+                }
+            )
+        closest_json.append(actor_row)
     motion = asdict(ego_motion)
     motion["history_speed_mps"] = [
         round(float(speed), 2) for speed in ego_motion.history_speed_mps
@@ -66,10 +81,13 @@ def build_online_prompt(
         if isinstance(value, float):
             motion[key] = round(value, 2)
 
+    required_fields = "action、risk、trajectory、reason"
+    if include_speed_target:
+        required_fields += "、target_speed_mps"
     return (
         "你是自动驾驶视觉语言动作模型。根据前视相机图像和场景统计，预测自车未来"
         "驾驶动作、启发式风险等级和未来轨迹。只输出合法 JSON，不要输出 Markdown。"
-        "字段必须为 action、risk、trajectory、reason；trajectory 必须包含未来 6 个 "
+        f"字段必须为 {required_fields}；trajectory 必须包含未来 6 个 "
         "[forward_m, lateral_m] 点。\n"
         f"驾驶指令：{navigation_instruction}\n"
         "场景统计："

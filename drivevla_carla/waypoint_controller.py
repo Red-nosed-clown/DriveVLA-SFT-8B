@@ -140,6 +140,7 @@ class WaypointController:
         action: str = "KEEP_LANE",
         prediction_age_s: float = 0.0,
         control_dt_s: float = 0.05,
+        predicted_target_speed_mps: float | None = None,
     ) -> ControlCommand:
         """根据最新轨迹和车速生成一步控制命令。"""
         safety = validate_trajectory(trajectory, prediction_age_s, self.config)
@@ -148,7 +149,11 @@ class WaypointController:
         if not math.isfinite(current_speed_mps) or current_speed_mps < 0.0:
             return self.emergency_stop("invalid_vehicle_speed")
 
-        target_speed = self._estimate_target_speed(trajectory, action)
+        target_speed = self._estimate_target_speed(
+            trajectory,
+            action,
+            predicted_target_speed_mps,
+        )
         steer = self._compute_steer(trajectory, current_speed_mps)
         throttle, brake = self._compute_longitudinal(
             current_speed_mps,
@@ -162,7 +167,12 @@ class WaypointController:
             target_speed_mps=target_speed,
         )
 
-    def _estimate_target_speed(self, trajectory: Trajectory, action: str) -> float:
+    def _estimate_target_speed(
+        self,
+        trajectory: Trajectory,
+        action: str,
+        predicted_target_speed_mps: float | None = None,
+    ) -> float:
         """按轨迹累计路程和预测时域估计期望速度。"""
         path_length = 0.0
         previous = (0.0, 0.0)
@@ -176,6 +186,12 @@ class WaypointController:
 
         horizon_s = len(trajectory) * self.config.trajectory_dt_s
         target_speed = path_length / max(horizon_s, 1e-3)
+        if (
+            predicted_target_speed_mps is not None
+            and math.isfinite(predicted_target_speed_mps)
+            and predicted_target_speed_mps >= 0.0
+        ):
+            target_speed = predicted_target_speed_mps
         target_speed = min(target_speed, self.config.max_target_speed_mps)
         if action == "STOP":
             return 0.0

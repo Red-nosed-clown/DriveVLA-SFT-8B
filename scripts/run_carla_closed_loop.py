@@ -503,6 +503,8 @@ def run(
     lead_vehicle = None
     minimum_lead_distance_m = float("inf")
     stopped_for_lead = False
+    latest_min_ttc_s = None
+    observed_ttc_values: list[float] = []
 
     try:
         print("[闭环] 正在生成 ego、RGB 相机和碰撞传感器", flush=True)
@@ -608,6 +610,11 @@ def run(
                     captured_at_s = None
                 if image is not None:
                     scene_stats, nearby = observer.observe_actors(world, ego)
+                    current_ttc_values = [
+                        float(actor.ttc_s) for actor in nearby if actor.ttc_s is not None
+                    ]
+                    latest_min_ttc_s = min(current_ttc_values) if current_ttc_values else None
+                    observed_ttc_values.extend(current_ttc_values)
                     if str(scenario.get("name", "")).startswith("intersection_"):
                         command_text = {
                             "STRAIGHT": "通过前方路口直行",
@@ -622,6 +629,12 @@ def run(
                         nearby,
                         observer.ego_motion(),
                         navigation_instruction=navigation,
+                        include_object_motion=(
+                            str(config["planner"].get("prompt_version", "v5")) == "v6_safety"
+                        ),
+                        include_speed_target=(
+                            str(config["planner"].get("prompt_version", "v5")) == "v6_safety"
+                        ),
                     )
                     future = executor.submit(
                         predict_with_capture_time,
@@ -656,6 +669,7 @@ def run(
                         action=str(parsed.get("action", "KEEP_LANE")),
                         prediction_age_s=prediction_age,
                         control_dt_s=fixed_dt,
+                        predicted_target_speed_mps=parsed.get("target_speed_mps"),
                     )
             ego.apply_control(command_to_vehicle_control(command))
             if lead_distance is not None and lead_distance <= 12.0 and motion.current_speed_mps < 0.25:
@@ -676,6 +690,7 @@ def run(
                     "collision_count": len(collision_events),
                     "lane_invasion_count": len(lane_events),
                     "lead_distance_m": lead_distance,
+                    "minimum_ttc_s": latest_min_ttc_s,
                     **route_state,
                 }
             )
@@ -756,6 +771,8 @@ def run(
             "collision_occurred": bool(collision_events),
             "fallback_rate": fallback_steps / max(actual_steps, 1),
             "hard_brake_rate": hard_brake_steps / max(actual_steps, 1),
+            "minimum_ttc_s": min(observed_ttc_values) if observed_ttc_values else None,
+            "ttc_observation_count": len(observed_ttc_values),
             "fallback_reasons": dict(fallback_reasons),
             "prediction_count": len(latencies),
             "action_counts": dict(action_counts),

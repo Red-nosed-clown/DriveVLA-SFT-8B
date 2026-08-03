@@ -197,6 +197,18 @@ def trajectory_motion_stats(trajectory: list[list[float]]) -> dict[str, float]:
     }
 
 
+def infer_target_speed_mps(trajectory: list[list[float]], step_duration_s: float = 0.5) -> float:
+    """用未来最后一段轨迹估计监督用目标速度。
+
+    该数值属于模型需要预测的标签，只能写入 assistant 输出，不能放进用户 prompt。
+    nuScenes 关键帧通常间隔约 0.5 秒，因此默认使用 0.5 秒换算。
+    """
+    if step_duration_s <= 0.0:
+        raise ValueError("step_duration_s 必须大于 0")
+    distances = trajectory_step_distances(trajectory)
+    return round(distances[-1] / step_duration_s, 2) if distances else 0.0
+
+
 def normalize_angle(angle_rad: float) -> float:
     """把角度归一化到 [-pi, pi]，避免跨越 180 度时差值跳变。"""
     return math.atan2(math.sin(angle_rad), math.cos(angle_rad))
@@ -370,8 +382,16 @@ def summarize_objects(
     category_by_token: dict[str, dict[str, Any]],
     current_pose: dict[str, Any],
     max_objects: int,
+    annotation_by_token: dict[str, dict[str, Any]] | None = None,
+    sample_by_token: dict[str, dict[str, Any]] | None = None,
+    ego_speed_mps: float = 0.0,
+    include_object_motion: bool = False,
 ) -> dict[str, Any]:
-    """统计交通参与者，并提取距离最近的目标作为可解释场景信息。"""
+    """统计交通参与者，并提取距离和历史运动信息。
+
+    v6 只通过 annotation.prev 读取目标过去的位置，绝不读取 annotation.next，
+    因此目标速度和 TTC 不会泄漏未来答案。
+    """
     counts = {"vehicles": 0, "pedestrians": 0, "obstacles": 0}
     nearest: list[dict[str, Any]] = []
     yaw = yaw_from_quaternion(current_pose["rotation"])
@@ -386,14 +406,61 @@ def summarize_objects(
         dy = annotation["translation"][1] - current_pose["translation"][1]
         forward = math.cos(yaw) * dx + math.sin(yaw) * dy
         lateral = -math.sin(yaw) * dx + math.cos(yaw) * dy
-        nearest.append(
-            {
-                "category": category_name,
-                "distance_m": round(math.hypot(forward, lateral), 2),
-                "forward_m": round(forward, 2),
-                "lateral_m": round(lateral, 2),
-            }
-        )
+        actor_info: dict[str, Any] = {
+            "category": category_name,
+            "distance_m": round(math.hypot(forward, lateral), 2),
+            "forward_m": round(forward, 2),
+            "lateral_m": round(lateral, 2),
+        }
+        if include_object_motion:
+            longitudinal_speed = None
+            previous = (annotation_by_token or {}).get(annotation.get("prev", ""))
+            current_sample = (sample_by_token or {}).get(annotation["sample_token"])
+            previous_sample = (
+                (sample_by_token or {}).get(previous["sample_token"])
+                if previous is not None
+                else None
+            )
+            if current_sample is not None and previous_sample is not None:
+                dt = (current_sample["timestamp"] - previous_sample["timestamp"]) / 1_000_000.0
+                if dt > 0.0:
+                    vx = (annotation["translation"][0] - previous["translation"][0]) / dt
+                    vy = (annotation["translation"][1] - previous["translation"][1]) / dt
+                    longitudinal_speed = math.cos(yaw) * vx + math.sin(yaw) * vy
+
+            relative_longitudinal = (
+                longitudinal_speed - ego_speed_mps
+                if longitudinal_speed is not None
+                else None
+            )
+            closing_speed = (
+                max(0.0, -relative_longitudinal)
+                if relative_longitudinal is not None
+                else None
+            )
+            ttc = (
+                forward / closing_speed
+                if closing_speed is not None
+                and closing_speed >= 0.5
+                and forward > 0.0
+                and abs(lateral) <= 4.0
+                else None
+            )
+            actor_info.update(
+                {
+                    "longitudinal_speed_mps": (
+                        round(longitudinal_speed, 2) if longitudinal_speed is not None else None
+                    ),
+                    "relative_longitudinal_speed_mps": (
+                        round(relative_longitudinal, 2)
+                        if relative_longitudinal is not None
+                        else None
+                    ),
+                    "closing_speed_mps": round(closing_speed, 2) if closing_speed is not None else None,
+                    "ttc_s": round(min(ttc, 99.0), 2) if ttc is not None else None,
+                }
+            )
+        nearest.append(actor_info)
     nearest.sort(key=lambda item: item["distance_m"])
     return {"counts": counts, "nearest": nearest[:max_objects]}
 
@@ -437,6 +504,7 @@ def make_record(
     future_steps: int,
     action_rule: str,
     history_motion: dict[str, Any] | None = None,
+    include_speed_target: bool = False,
 ) -> dict[str, Any]:
     """构造自写脚本可读的 Qwen3-VL 多模态 SFT 样本。"""
     action = infer_action_token(trajectory, action_rule, history_motion)
@@ -447,6 +515,8 @@ def make_record(
         "trajectory": trajectory,
         "reason": build_reason(action, risk),
     }
+    if include_speed_target:
+        answer["target_speed_mps"] = infer_target_speed_mps(trajectory)
     history_text = ""
     if history_motion:
         history_text = (
@@ -454,11 +524,14 @@ def make_record(
             "\n运动提示：历史速度用于判断 KEEP_LANE、SLOW_DOWN 和 STOP；"
             "未来轨迹点间距应反映速度变化，横向变化应反映道路转向趋势。"
         )
+    required_fields = "action、risk、trajectory、reason"
+    if include_speed_target:
+        required_fields += "、target_speed_mps"
     prompt = (
         "你是自动驾驶视觉语言动作模型。根据前视相机图像和场景统计，"
         "预测自车未来驾驶动作、启发式风险等级和未来轨迹。"
         "只输出合法 JSON，不要输出 Markdown。"
-        "字段必须为 action、risk、trajectory、reason；"
+        f"字段必须为 {required_fields}；"
         f"trajectory 必须包含未来 {future_steps} 个 [forward_m, lateral_m] 点。\n"
         "驾驶指令：安全沿道路行驶。\n"
         f"场景统计：{json.dumps(object_summary['counts'], ensure_ascii=False)}\n"
@@ -490,6 +563,7 @@ def make_record(
             "risk": risk,
             "risk_score": risk_score,
             "object_counts": object_summary["counts"],
+            "nearest_objects": object_summary["nearest"],
             "history_motion": history_motion or {},
             "motion_stats": trajectory_motion_stats(trajectory),
             "action_rule": action_rule,
@@ -682,6 +756,8 @@ def build_report(
     action_rule: str,
     balance_info: dict[str, Any],
     history_steps: int,
+    include_object_motion: bool,
+    include_speed_target: bool,
 ) -> str:
     """生成可直接放入项目文档的数据集统计报告。"""
     action_counts = Counter(row["metadata"]["action"] for row in rows)
@@ -693,6 +769,15 @@ def build_report(
         if rows
         else 0.0
     )
+    nearest_objects = [
+        actor
+        for row in rows
+        for actor in row["metadata"].get("nearest_objects", [])
+    ]
+    motion_objects = [
+        actor for actor in nearest_objects if actor.get("longitudinal_speed_mps") is not None
+    ]
+    ttc_objects = [actor for actor in nearest_objects if actor.get("ttc_s") is not None]
     lines = [
         "# nuScenes VLA 数据报告",
         "",
@@ -706,6 +791,10 @@ def build_report(
         f"- 轨迹点数：{len(rows[0]['ground_truth']['trajectory']) if rows else 0}",
         f"- 动作标签规则：{action_rule}",
         f"- 历史自车运动步数：{history_steps}",
+        f"- 最近目标历史运动与 TTC：{include_object_motion}",
+        f"- 目标速度监督：{include_speed_target}",
+        f"- 最近目标历史速度覆盖率：{len(motion_objects) / max(len(nearest_objects), 1):.2%}",
+        f"- 可计算 TTC 的目标数：{len(ttc_objects)}",
         f"- 训练集动作均衡采样：{balance_info.get('enabled', False)}",
         f"- 平均未来轨迹路程：{average_path_length:.2f} 米",
         f"- scene 开头历史帧不足：{skipped['insufficient_history']}",
@@ -744,6 +833,8 @@ def build_report(
             "",
             "- 轨迹由未来 ego pose 转换到当前自车坐标系得到。",
             "- 历史自车运动只使用当前帧之前的 ego pose，不包含未来答案。",
+            "- 目标速度与 TTC 只使用当前及过去 annotation，不读取未来目标标注。",
+            "- target_speed_mps 由未来轨迹生成，只作为 assistant 监督标签。",
             "- Risk 是根据交通参与者数量生成的 heuristic 弱监督标签，不是真实人工风险标注。",
             "- Action 也是由未来 ego pose 生成的 heuristic 弱监督标签，不是真实人工驾驶意图标注。",
             "- 数据按 scene 切分，训练场景与验证场景没有交集。",
@@ -774,6 +865,7 @@ def build_dataset(args: argparse.Namespace) -> None:
 
     sample_by_token = {item["token"]: item for item in samples}
     pose_by_token = {item["token"]: item for item in ego_poses}
+    annotation_by_token = {item["token"]: item for item in annotations}
     instance_by_token = {item["token"]: item for item in instances}
     category_by_token = {item["token"]: item for item in categories}
     annotations_by_sample: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -844,6 +936,10 @@ def build_dataset(args: argparse.Namespace) -> None:
             category_by_token,
             current_pose,
             args.max_objects,
+            annotation_by_token,
+            sample_by_token,
+            float((history_motion or {}).get("current_speed_mps", 0.0)),
+            args.include_object_motion,
         )
         rows.append(
             make_record(
@@ -854,6 +950,7 @@ def build_dataset(args: argparse.Namespace) -> None:
                 args.future_steps,
                 args.action_rule,
                 history_motion,
+                args.include_speed_target,
             )
         )
 
@@ -902,6 +999,8 @@ def build_dataset(args: argparse.Namespace) -> None:
         "future_steps": args.future_steps,
         "history_steps": args.history_steps,
         "action_rule": args.action_rule,
+        "include_object_motion": args.include_object_motion,
+        "include_speed_target": args.include_speed_target,
         "train_samples": len(train_rows),
         "raw_train_samples_before_balance": raw_train_samples,
         "val_samples": len(val_rows),
@@ -912,6 +1011,29 @@ def build_dataset(args: argparse.Namespace) -> None:
         "val_action_distribution": dict(Counter(row["metadata"]["action"] for row in val_rows)),
         "risk_distribution": dict(Counter(row["metadata"]["risk"] for row in rows)),
         "train_balance": balance_info,
+        "object_motion_stats": {
+            "nearest_object_count": sum(
+                len(row["metadata"].get("nearest_objects", [])) for row in rows
+            ),
+            "motion_available_count": sum(
+                actor.get("longitudinal_speed_mps") is not None
+                for row in rows
+                for actor in row["metadata"].get("nearest_objects", [])
+            ),
+            "ttc_available_count": sum(
+                actor.get("ttc_s") is not None
+                for row in rows
+                for actor in row["metadata"].get("nearest_objects", [])
+            ),
+        },
+        "target_speed_range_mps": (
+            [
+                min(row["ground_truth"]["target_speed_mps"] for row in rows),
+                max(row["ground_truth"]["target_speed_mps"] for row in rows),
+            ]
+            if args.include_speed_target and rows
+            else None
+        ),
         "average_trajectory_path_length_m": round(
             mean(trajectory_path_length(row["ground_truth"]["trajectory"]) for row in rows),
             2,
@@ -931,6 +1053,8 @@ def build_dataset(args: argparse.Namespace) -> None:
         args.action_rule,
         balance_info,
         args.history_steps,
+        args.include_object_motion,
+        args.include_speed_target,
     )
     (output_dir / "dataset_report.md").write_text(report, encoding="utf-8")
     print(json.dumps(summary, ensure_ascii=False, indent=2))
@@ -953,6 +1077,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--balance-train", "--balance_train", action="store_true")
     parser.add_argument("--balance-target-count", "--balance_target_count", type=int, default=0)
     parser.add_argument("--action-target-counts-json", "--action_target_counts_json", default="")
+    parser.add_argument(
+        "--include-object-motion",
+        "--include_object_motion",
+        action="store_true",
+        help="使用目标过去标注生成纵向速度、相对速度和 TTC",
+    )
+    parser.add_argument(
+        "--include-speed-target",
+        "--include_speed_target",
+        action="store_true",
+        help="在 assistant JSON 中增加 target_speed_mps 监督",
+    )
     return parser.parse_args()
 
 

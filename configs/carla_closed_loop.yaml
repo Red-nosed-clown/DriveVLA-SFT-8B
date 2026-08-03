@@ -49,6 +49,8 @@ planner:
   image_max_pixels: 131072
   max_new_tokens: 128
   replan_interval_s: 0.1
+  # v5 保持旧 prompt；训练完 v6 adapter 后改为 v6_safety。
+  prompt_version: v5
 
 camera:
   width: 896

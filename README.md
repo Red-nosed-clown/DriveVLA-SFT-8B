@@ -3,7 +3,15 @@
 基于 `Qwen/Qwen3-VL-8B-Instruct + 4bit QLoRA` 的自动驾驶
 Vision-Language-Action 微调项目。项目先用本地 `nuScenes-mini` 跑通完整闭环，
 随后扩展到本地 `nuScenes trainval` 相机数据。主训练由 LLaMA-Factory 完成，
-推理、输出解析、ADE/FDE、轨迹几何分析、可视化和失败分析由项目自行实现。
+推理、输出解析、ADE/FDE、轨迹几何分析、可视化和失败分析由项目自行实现；
+模型输出还接入 CARLA Pure Pursuit/PID 控制闭环，用于验证离线指标之外的安全问题。
+
+当前工程包含四条可复现链路：
+
+1. nuScenes scene 级数据构建与弱监督标签生成；
+2. Qwen3-VL-8B 单卡 4bit QLoRA SFT 与 DPO；
+3. 结构化输出、离散动作、连续轨迹和目标速度评估；
+4. CARLA 异步规划、轨迹控制、fallback 与多 seed 能力场景评测。
 
 ## 项目动机
 
@@ -26,13 +34,15 @@ Action、Risk 和连续轨迹。重点不是声称小数据模型可以直接控
   "action": "KEEP_LANE",
   "risk": "HIGH",
   "trajectory": [[4.51, -0.01], [9.32, 0.01], [13.52, 0.08], [17.59, 0.17], [21.07, 0.25], [24.82, 0.38]],
-  "reason": "保持当前车道并平稳前进；周边交通参与者密集，需要谨慎决策。"
+  "reason": "保持当前车道并平稳前进；周边交通参与者密集，需要谨慎决策。",
+  "target_speed_mps": 8.28
 }
 ```
 
 `trajectory` 是当前自车坐标系下未来 6 个关键帧的
 `[forward_m, lateral_m]`。Risk 来自交通参与者数量的 heuristic 弱监督，
-不是 nuScenes 人工风险标注。
+不是 nuScenes 人工风险标注。`target_speed_mps` 是 v6 新增的可选监督字段，
+旧版模型仍保持四字段输出。
 
 ## 已构建数据
 
@@ -62,6 +72,21 @@ Action、Risk 和连续轨迹。重点不是声称小数据模型可以直接控
 `data/nuscenes_vla_sft_trainval`。该目录成功转换 23349 条样本，其中训练集
 21030 条、验证集 2319 条。由于本地数据目录缺少部分 `CAM_FRONT` 图像，转换时
 跳过 5700 条缺图样本；scene 末尾不足未来 6 帧的样本跳过 5100 条。
+
+v6 在相同 full trainval scene split 上保留 3 个历史 ego 关键帧，并根据当前及
+过去的 `sample_annotation` 增加目标纵向速度、相对速度、closing speed 与 TTC。
+目标运动输入只沿 `annotation.prev` 读取历史标注，不读取未来目标状态；未来 ego
+轨迹仅用于生成 assistant 监督，避免答案泄漏。
+
+| v6 Split | Samples |
+|---|---:|
+| Train | 19,182 |
+| Validation | 2,115 |
+| Total | 21,297 |
+
+v6 共记录 166,368 个最近目标，历史速度可计算率为 98.74%，其中 12,268 个
+前方接近目标可计算 TTC。完整统计见
+[`data/nuscenes_vla_sft_trainval_v6_safety/dataset_report.md`](data/nuscenes_vla_sft_trainval_v6_safety/dataset_report.md)。
 
 ## 环境
 
@@ -216,6 +241,12 @@ v5 随后完成 3 epoch 全量训练，并在全部 2115 条 scene 隔离验证�
 完整验证中预测近似直线比例为 45.67%，预测二阶差分均值为 0.0836，仍低于
 GT 的 0.2015。这里的“弯曲度”是轨迹点二阶差分诊断量，不是严格物理曲率。
 
+v6 在 v5 基础上补充目标动态信息和 `target_speed_mps` 监督。32 条样本、2 step
+的 4bit QLoRA 冒烟训练已经通过，train loss 为 1.2888，adapter 可以正常保存。
+正式配置见
+[`configs/qwen3vl_8b_qlora_trainval_v6_safety_full.yaml`](configs/qwen3vl_8b_qlora_trainval_v6_safety_full.yaml)，
+3 epoch full trainval 训练正在进行；在训练和完整评估结束前不填写 v6 正式指标。
+
 ## 离线偏好优化
 
 在不接入 CARLA/VERL 的阶段，项目实现了一个可复现的离线数据飞轮：
@@ -265,6 +296,7 @@ env -u PYTHONPATH PYTHONNOUSERSITE=1 \
 - 严格 JSON、code fence、对象提取和旧格式正则四级解析；
 - Parse Success、Action Accuracy、Risk Accuracy、Trajectory Valid；
 - 六点轨迹 ADE、FDE 和轨迹几何弯曲度；
+- v6 `target_speed_mps` 有效率与 Target Speed MAE；
 - 失败案例分类、Markdown 报告和图像/轨迹可视化。
 
 ## 实验结果
@@ -308,6 +340,22 @@ Action Accuracy 和 Risk Accuracy 均记为 0；这正是结构化 SFT 带来的
 - [trainval 完整评估摘要](results/trainval_finetuned_full_summary.md)
 - [trainval 轨迹几何分析](results/trainval_finetuned_full_trajectory_geometry.md)
 
+## CARLA 闭环评测
+
+项目将结构化六点轨迹接入 Pure Pursuit 横向控制和 PID 纵向控制，并实现异步
+Qwen 推理、轨迹超时检测、路线 fallback、碰撞/车道侵入传感器及逐帧 JSONL 日志。
+v5 首轮基线完成 5 类能力场景乘 5 个 seed，共 25 次运行：
+
+- 总体碰撞运行：3/25，全部发生在静止前车场景；
+- 静止前车碰撞运行率 60%，安全停车成功率 0%；
+- 自然弯道路线完成率 61.92%±4.60%，平均车道侵入 3.60 次；
+- 平均 fallback 占比 28.89%，因此闭环结果不能全部归因于 VLA 模型。
+
+该实验暴露了离线 ADE/FDE 无法直接反映的过度停车、目标运动不可观测、推理延迟
+和横向控制问题。v6 已在在线 prompt 与逐帧日志中加入目标相对速度、TTC 和预测
+目标速度接口，待正式 adapter 完成后按同一场景与 seed 做严格对照。聚合结果见
+[`results/carla/generalization/capability_generalization_summary.md`](results/carla/generalization/capability_generalization_summary.md)。
+
 ## 可视化
 
 下图同时显示原始 `CAM_FRONT`、真实六点轨迹和 QLoRA 预测轨迹：
@@ -342,6 +390,7 @@ adapter。
 - [下一步优化计划](docs/05_next_optimization.md)
 - [DPO 离线偏好优化](docs/06_dpo_preference_optimization.md)
 - [CARLA 闭环接入](docs/07_carla_closed_loop.md)
+- [v6 时序安全输入](docs/08_v6_temporal_safety.md)
 
 ## 项目边界
 
@@ -353,10 +402,9 @@ nuScenes-mini 只有 10 个 scene，仅用于早期工程链路验证；项目�
 
 ## 后续方向
 
-- v5 历史 ego motion 显著改善 ADE/FDE 和直线化，下一步拆分速度意图监督；
-- 将 DPO 候选扩大到 4000 条，并约束错误类别和 GT action 分布；
-- 增加曲率、最终横向位移、航向变化等轨迹形状指标，避免只看 ADE/FDE；
-- 加入历史帧或 ego speed，让模型看到速度变化趋势；
+- 完成 v6 full trainval 评估，报告 Action/Risk、ADE/FDE 与 Target Speed MAE；
+- 在完全相同 CARLA 场景和 seed 下对比 v5/v6 的碰撞率、最小 TTC 和 fallback；
+- 基于 v6 闭环失败样本重新构造 chosen/rejected，再评估 DPO 是否改善独立安全指标；
 - 引入地图/车道中心线或三前向相机，改善弯道轨迹形状；
 - 扩展 CARLA 多地图、多天气和参数化前车场景，分别报告纯 VLA 输出、fallback
   使用率与最终闭环指标。

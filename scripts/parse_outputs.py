@@ -140,6 +140,13 @@ def normalize_result(data: Any, parser_name: str) -> dict[str, Any]:
     risk = str(lowered.get("risk", "UNKNOWN")).strip().upper()
     trajectory = normalize_trajectory(lowered.get("trajectory"))
     reason = str(lowered.get("reason", "")).strip()
+    target_speed = None
+    try:
+        candidate_speed = float(lowered.get("target_speed_mps"))
+        if 0.0 <= candidate_speed < 100.0:
+            target_speed = candidate_speed
+    except (TypeError, ValueError):
+        pass
 
     action_valid = action in VALID_ACTIONS
     risk_valid = risk in VALID_RISKS
@@ -151,6 +158,7 @@ def normalize_result(data: Any, parser_name: str) -> dict[str, Any]:
         "risk": risk if risk_valid else "UNKNOWN",
         "trajectory": trajectory,
         "reason": reason,
+        "target_speed_mps": target_speed,
         "action_valid": action_valid,
         "risk_valid": risk_valid,
         "trajectory_valid": trajectory_valid,

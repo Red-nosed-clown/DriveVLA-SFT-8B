@@ -67,6 +67,23 @@ class WaypointControllerTest(unittest.TestCase):
         self.assertEqual(command.target_speed_mps, self.config.slow_down_speed_mps)
         self.assertGreater(command.brake, 0.0)
 
+    def test_v6_target_speed_overrides_trajectory_speed(self) -> None:
+        command = self.controller.run_step(
+            self.straight,
+            current_speed_mps=4.0,
+            predicted_target_speed_mps=2.5,
+        )
+        self.assertEqual(command.target_speed_mps, 2.5)
+
+    def test_v6_target_speed_still_respects_stop(self) -> None:
+        command = self.controller.run_step(
+            self.straight,
+            current_speed_mps=4.0,
+            action="STOP",
+            predicted_target_speed_mps=8.0,
+        )
+        self.assertEqual(command.target_speed_mps, 0.0)
+
     def test_timeout_uses_emergency_stop(self) -> None:
         command = self.controller.run_step(
             self.straight,
@@ -110,6 +127,18 @@ class WaypointControllerTest(unittest.TestCase):
         self.assertIn("最近目标", prompt)
         self.assertIn("历史自车运动", prompt)
         self.assertIn("trajectory 必须包含未来 6 个", prompt)
+        self.assertNotIn("target_speed_mps", prompt)
+
+    def test_online_prompt_can_include_v6_safety_fields(self) -> None:
+        prompt = build_online_prompt(
+            SceneStats(vehicles=1, pedestrians=0, obstacles=0),
+            [NearbyActor("vehicle.car", 12.0, 12.0, 0.2, 2.0, -3.0, 3.0, 4.0)],
+            EgoMotion(3, 1.5, [4.0, 4.5, 5.0], 5.0, 0.67, 0.0, 7.0, 0.0),
+            include_object_motion=True,
+            include_speed_target=True,
+        )
+        self.assertIn('"ttc_s": 4.0', prompt)
+        self.assertIn("target_speed_mps", prompt)
 
     def test_world_delta_to_ego_uses_left_positive_lateral(self) -> None:
         """CARLA 世界坐标必须转换成训练数据使用的左正横向坐标。"""

@@ -21,7 +21,10 @@ from pathlib import Path
 from statistics import mean
 from typing import Any
 
-from parse_outputs import load_jsonl, parse_model_output, save_jsonl
+try:
+    from parse_outputs import load_jsonl, parse_model_output, save_jsonl
+except ModuleNotFoundError:  # 作为模块被单元测试导入时使用包内路径。
+    from scripts.parse_outputs import load_jsonl, parse_model_output, save_jsonl
 
 
 def displacement_errors(
@@ -61,6 +64,7 @@ def evaluate_rows(rows: list[dict[str, Any]]) -> tuple[dict[str, Any], list[dict
     ades: list[float] = []
     fdes: list[float] = []
     reason_lengths: list[int] = []
+    target_speed_errors: list[float] = []
     failures: list[dict[str, Any]] = []
 
     for row in rows:
@@ -77,6 +81,13 @@ def evaluate_rows(rows: list[dict[str, Any]]) -> tuple[dict[str, Any], list[dict
         risk_flags.append(risk_correct)
         trajectory_flags.append(bool(parsed["trajectory_valid"]))
         reason_lengths.append(len(parsed.get("reason", "")))
+
+        gt_target_speed = ground_truth.get("target_speed_mps")
+        pred_target_speed = parsed.get("target_speed_mps")
+        if isinstance(gt_target_speed, (int, float)) and isinstance(
+            pred_target_speed, (int, float)
+        ):
+            target_speed_errors.append(abs(float(pred_target_speed) - float(gt_target_speed)))
 
         sample_ade: float | None = None
         sample_fde: float | None = None
@@ -128,6 +139,9 @@ def evaluate_rows(rows: list[dict[str, Any]]) -> tuple[dict[str, Any], list[dict
         "fde": mean(fdes) if fdes else None,
         "trajectory_metric_samples": valid_trajectory_count,
         "average_reason_length": mean(reason_lengths) if reason_lengths else 0.0,
+        "target_speed_valid_rate": len(target_speed_errors) / total if total else 0.0,
+        "target_speed_mae_mps": mean(target_speed_errors) if target_speed_errors else None,
+        "target_speed_metric_samples": len(target_speed_errors),
         "failure_count": len(failures),
     }
     return metrics, failures
@@ -157,9 +171,12 @@ def build_markdown(metrics: dict[str, Any]) -> str:
             f"| Trajectory Valid | {format_metric(metrics['trajectory_valid_rate'], True)} |",
             f"| ADE | {format_metric(metrics['ade'])} m |",
             f"| FDE | {format_metric(metrics['fde'])} m |",
+            f"| Target Speed Valid | {format_metric(metrics['target_speed_valid_rate'], True)} |",
+            f"| Target Speed MAE | {format_metric(metrics['target_speed_mae_mps'])} m/s |",
             f"| Average Reason Length | {format_metric(metrics['average_reason_length'])} |",
             "",
             f"- 可计算轨迹误差样本：{metrics['trajectory_metric_samples']}",
+            f"- 可计算目标速度误差样本：{metrics['target_speed_metric_samples']}",
             f"- 失败样本：{metrics['failure_count']}",
             "",
         ]

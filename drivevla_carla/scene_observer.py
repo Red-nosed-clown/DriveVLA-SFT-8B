@@ -99,6 +99,12 @@ class SceneObserver:
         nearby: list[NearbyActor] = []
         vehicle_count = 0
         pedestrian_count = 0
+        ego_yaw = math.radians(float(ego_transform.rotation.yaw))
+        ego_velocity = ego_vehicle.get_velocity()
+        ego_longitudinal_speed = (
+            float(ego_velocity.x) * math.cos(ego_yaw)
+            + float(ego_velocity.y) * math.sin(ego_yaw)
+        )
 
         for actor in world.get_actors():
             if actor.id == ego_vehicle.id:
@@ -117,7 +123,30 @@ class SceneObserver:
             if distance > self.nearby_radius_m:
                 continue
             forward, lateral = world_delta_to_ego(dx, dy, ego_transform.rotation.yaw)
-            nearby.append(NearbyActor(category, distance, forward, lateral))
+            velocity = actor.get_velocity()
+            longitudinal_speed = (
+                float(velocity.x) * math.cos(ego_yaw)
+                + float(velocity.y) * math.sin(ego_yaw)
+            )
+            relative_longitudinal = longitudinal_speed - ego_longitudinal_speed
+            closing_speed = max(0.0, -relative_longitudinal)
+            ttc = (
+                min(forward / closing_speed, 99.0)
+                if closing_speed >= 0.5 and forward > 0.0 and abs(lateral) <= 4.0
+                else None
+            )
+            nearby.append(
+                NearbyActor(
+                    category,
+                    distance,
+                    forward,
+                    lateral,
+                    round(longitudinal_speed, 2),
+                    round(relative_longitudinal, 2),
+                    round(closing_speed, 2),
+                    round(ttc, 2) if ttc is not None else None,
+                )
+            )
             if category == "vehicle":
                 vehicle_count += 1
             else:
