@@ -332,13 +332,15 @@ adapter。
 - [失败分析](docs/04_failure_analysis.md)
 - [下一步优化计划](docs/05_next_optimization.md)
 - [DPO 离线偏好优化](docs/06_dpo_preference_optimization.md)
+- [CARLA 闭环接入](docs/07_carla_closed_loop.md)
 
 ## 项目边界
 
 nuScenes-mini 只有 10 个 scene，当前结果用于验证完整工程链路，不代表真实道路
 泛化或闭环控制性能。9:1 scene 划分后的单个验证 scene 不包含 STOP、
 TURN_RIGHT 和 LOW risk，分类结果不能代表这些类别的验证性能。第一版仅使用
-单目 `CAM_FRONT`，也没有车辆控制器和仿真闭环。
+单目 `CAM_FRONT`。CARLA 实验属于仿真闭环验证，且当前只覆盖单一地图、天气
+和有限场景参数，不代表真实车辆性能或完整域泛化。
 
 ## 后续方向
 
@@ -347,16 +349,5 @@ TURN_RIGHT 和 LOW risk，分类结果不能代表这些类别的验证性能。
 - 增加曲率、最终横向位移、航向变化等轨迹形状指标，避免只看 ADE/FDE；
 - 加入历史帧或 ego speed，让模型看到速度变化趋势；
 - 引入地图/车道中心线或三前向相机，改善弯道轨迹形状；
-- 接入 CARLA 或规划控制器，补充碰撞率、到达率和闭环轨迹偏差。
-
-## 简历描述
-
-- 基于 nuScenes-mini 和本地 nuScenes trainval 前视图像、ego pose 与目标标注构建
-  VLA SFT 数据，将未来 6 个 ego pose 转换到当前自车坐标系，并按 scene 隔离训练/验证集。
-- 在单卡 RTX 5090 上使用 NF4 4bit QLoRA 微调 Qwen3-VL-8B-Instruct，仅训练
-  0.4954% 参数，实现 Action、heuristic Risk、六点轨迹和 Reason 的结构化生成。
-- 自行实现多级 JSON 容错解析、Action/Risk Accuracy、ADE/FDE、轨迹几何分析、
-  可视化与失败分析；trainval 完整验证集 Action Accuracy 达到 80.42%，并发现
-  连续轨迹仍存在过度平滑和直线化问题。
-- 构建冻结 SFT 失败挖掘、chosen/rejected 构造、4bit DPO 和成对评估链路；
-  通过两轮 pilot 发现偏好准确率不能替代独立驾驶指标，并据此阻止无效全量训练。
+- 扩展 CARLA 多地图、多天气和参数化前车场景，分别报告纯 VLA 输出、fallback
+  使用率与最终闭环指标。

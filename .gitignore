@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 .venv/
 
+# 个人整理材料只保留在本机，不属于公开项目交付物。
+.local/
+
 # 本地数据由转换脚本重新生成，其中包含不可迁移的绝对图片路径。
 data/nuscenes_vla_sft/*.json
 data/nuscenes_vla_sft/*.jsonl
@@ -74,6 +77,12 @@ results/**
 !results/dpo_pilot_isolated_val200_trajectory_geometry.md
 !results/dpo_pilot_isolated_val200_vs_sft.md
 !results/dpo_pilot_isolated_val200_vs_sft.json
+!results/carla/
+results/carla/**
+!results/carla/generalization/
+results/carla/generalization/**
+!results/carla/generalization/capability_generalization_summary.md
+!results/carla/generalization/capability_generalization_summary.json
 
 # 保留正式训练曲线，不上传 adapter 和 checkpoint。
 !results/qwen3vl_8b_drivevla_qlora/

@@ -255,11 +255,3 @@ action 字段 59.00% 接近。这说明 v5 不是“文字 action 写错但轨�
 - `SLOW_DOWN` 没有学好，不能直接把 v5 作为最终动作分类版本；
 - 如果时间允许，下一步优先做 v6：保留 v5 历史运动输入，同时在 assistant JSON
   增加 `speed_intent` 或 `motion_state` 字段，把速度变化从 action 枚举里拆出来。
-
-## 简历表达
-
-可以把这部分写成项目亮点：
-
-> 在 QLoRA 微调后，模型动作准确率达到 80.42%，但进一步通过轨迹曲率和横向位移分析发现
-> 连续轨迹存在过平滑问题；因此设计了 confusion matrix、curvature metric 和低频动作
-> 重采样方案，用于定位并优化 Vision-Language-Action 模型的决策与轨迹生成误差。

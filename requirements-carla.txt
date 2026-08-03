@@ -1,0 +1,2 @@
+# CARLA 服务端和 Python API 必须使用完全相同的版本。
+carla==0.9.16
