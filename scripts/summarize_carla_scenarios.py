@@ -71,6 +71,11 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
     scenario_metrics: dict[str, Any] = {}
     for scenario, items in sorted(grouped.items()):
         route_values = [item["route_completion"] for item in items]
+        ttc_values = [
+            float(item["minimum_ttc_s"])
+            for item in items
+            if item.get("minimum_ttc_s") is not None
+        ]
         scenario_metrics[scenario] = {
             "runs": len(items),
             "seeds": sorted({item["seed"] for item in items if item["seed"] is not None}),
@@ -87,6 +92,8 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 if item["expected_action_rate"] is not None
             ),
             "safe_stop_run_rate": statistics.fmean(bool(item.get("safe_stop_success")) for item in items),
+            "minimum_ttc_mean_s": statistics.fmean(ttc_values) if ttc_values else None,
+            "ttc_observed_runs": len(ttc_values),
         }
     return {
         "run_count": len(rows),
@@ -155,8 +162,8 @@ def render_markdown(rows: list[dict[str, Any]], summary: dict[str, Any]) -> str:
             "",
             "## 分场景聚合",
             "",
-            "| Scenario | Runs | Route mean±std | Collision runs | Lane mean | Expected action | Fallback | Hard brake | Latency |",
-            "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+            "| Scenario | Runs | Route mean±std | Collision runs | Lane mean | Expected action | Fallback | Hard brake | Latency | Min TTC |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
     for scenario, metrics in summary["scenarios"].items():
@@ -168,7 +175,8 @@ def render_markdown(rows: list[dict[str, Any]], summary: dict[str, Any]) -> str:
             f"{percentage(metrics['expected_action_rate_mean'])} | "
             f"{percentage(metrics['fallback_rate_mean'])} | "
             f"{percentage(metrics['hard_brake_rate_mean'])} | "
-            f"{number(metrics['latency_mean_s'])}s |"
+            f"{number(metrics['latency_mean_s'])}s | "
+            f"{number(metrics['minimum_ttc_mean_s'])}s |"
         )
 
     lines.extend(["", "## 当前结论", ""])

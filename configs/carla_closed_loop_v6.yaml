@@ -1,0 +1,86 @@
+server:
+  image: carlasim/carla:0.9.16
+  host: 127.0.0.1
+  rpc_port: 2000
+  traffic_manager_port: 8000
+  render_mode: gui
+  no_sound: true
+  quality_level: Low
+  window_width: 1280
+  window_height: 720
+  timeout_s: 120
+
+simulation:
+  town: Town10HD_Opt
+  synchronous_mode: true
+  fixed_delta_seconds: 0.05
+  seed: 42
+  max_steps: 200
+  real_time: true
+  route_length_m: 50.0
+  route_step_m: 2.0
+  goal_threshold_m: 3.0
+  stop_on_goal: true
+  stop_on_collision: false
+
+scenario:
+  name: empty_straight
+  route_command: STRAIGHT
+  require_junction: false
+  require_curve: false
+  junction_lookahead_m: 60.0
+  minimum_curve_yaw_deg: 15.0
+  lead_vehicle_enabled: false
+  lead_vehicle_distance_m: 18.0
+  lead_vehicle_speed_mps: 0.0
+  safe_stop_distance_m: 5.0
+
+traffic:
+  enabled: false
+  npc_vehicles: 0
+  minimum_spawn_distance_m: 12.0
+  following_distance_m: 2.5
+
+planner:
+  model_name_or_path: Qwen/Qwen3-VL-8B-Instruct
+  adapter_path: results/qwen3vl_8b_drivevla_trainval_v6_safety_full
+  load_in_4bit: true
+  gpu_memory_fraction: 0.55
+  image_max_pixels: 131072
+  max_new_tokens: 160
+  replan_interval_s: 0.1
+  # v6 adapter 训练时包含目标相对速度、TTC 和 target_speed_mps。
+  prompt_version: v6_safety
+
+camera:
+  width: 896
+  height: 512
+  fov: 90
+  sensor_tick: 0.05
+  x: 1.5
+  z: 2.4
+
+spectator:
+  enabled: true
+  x: -8.0
+  y: 0.0
+  z: 4.0
+  pitch: -15.0
+
+controller:
+  trajectory_points: 6
+  trajectory_dt_s: 0.5
+  wheelbase_m: 2.875
+  max_steer_angle_deg: 35.0
+  carla_steer_sign: -1.0
+  min_lookahead_m: 3.0
+  lookahead_time_s: 0.8
+  max_target_speed_mps: 12.0
+  slow_down_speed_mps: 4.0
+  prediction_timeout_s: 5.0
+
+safety:
+  max_lateral_m: 12.0
+  max_segment_m: 15.0
+  backward_tolerance_m: 0.5
+  emergency_brake: 1.0

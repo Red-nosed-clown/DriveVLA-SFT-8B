@@ -246,3 +246,49 @@ cat results/carla/generalization/capability_generalization_summary.md
 
 需要覆盖已有结果时显式增加 `--overwrite`。批量开始前必须先启动 CARLA；若服务端
 中途退出，重新启动 CARLA 后再次执行原命令即可从未完成组合继续。
+
+## v5/v6 同条件对照
+
+v6 必须使用独立配置和结果目录，不能覆盖 v5 基线。v6 配置只改变模型 adapter、
+prompt 动态字段和目标速度输出，其余地图、场景、相机、控制器、seed 与 v5 保持
+一致：
+
+```bash
+env -u PYTHONPATH PYTHONNOUSERSITE=1 \
+  HF_HUB_OFFLINE=1 TOKENIZERS_PARALLELISM=false \
+  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+  /home/pc/miniconda3/envs/drivevla_sft/bin/python \
+  scripts/run_carla_capability_batch.py \
+  --config configs/carla_closed_loop_v6.yaml \
+  --seeds 7 21 42 84 123 --max-steps 300 \
+  --results-dir results/carla/v6_generalization
+```
+
+v6 优先观察 `lead_stop` 的碰撞运行率、安全停车成功率和最小 TTC，再看
+`natural_curve` 的车道侵入。若先做小范围验证，可只运行两个关键场景：
+
+```bash
+env -u PYTHONPATH PYTHONNOUSERSITE=1 \
+  HF_HUB_OFFLINE=1 TOKENIZERS_PARALLELISM=false \
+  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+  /home/pc/miniconda3/envs/drivevla_sft/bin/python \
+  scripts/run_carla_capability_batch.py \
+  --config configs/carla_closed_loop_v6.yaml \
+  --scenarios lead_stop natural_curve \
+  --seeds 7 21 42 84 123 --max-steps 300 \
+  --results-dir results/carla/v6_pilot
+```
+
+同一个批量进程只允许使用一个模型配置。切换 v5/v6 时应结束旧批量进程后重新
+启动，确保内存中的 planner 不会跨模型复用。
+
+v6 全部完成后生成同场景对照报告：
+
+```bash
+/home/pc/miniconda3/envs/drivevla_sft/bin/python \
+  scripts/compare_carla_versions.py \
+  --baseline results/carla/generalization/capability_generalization_summary.json \
+  --candidate results/carla/v6_generalization/capability_generalization_summary.json \
+  --baseline-name v5 --candidate-name v6 \
+  --output results/carla/v5_vs_v6.md
+```
