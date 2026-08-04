@@ -245,7 +245,25 @@ v6 在 v5 基础上补充目标动态信息和 `target_speed_mps` 监督。32 �
 的 4bit QLoRA 冒烟训练已经通过，train loss 为 1.2888，adapter 可以正常保存。
 正式配置见
 [`configs/qwen3vl_8b_qlora_trainval_v6_safety_full.yaml`](configs/qwen3vl_8b_qlora_trainval_v6_safety_full.yaml)，
-3 epoch full trainval 训练正在进行；在训练和完整评估结束前不填写 v6 正式指标。
+3 epoch full trainval 训练已经完成：
+
+- optimizer step：7,194；
+- 训练耗时：36,591.7 秒，约 10 小时 10 分；
+- 最终 train loss：0.2824；
+- 最终 eval loss：0.2797。
+
+在相同 200 条验证样本上的 v5/v6 pilot 对照如下。该结果只用于决定是否继续跑
+2,115 条完整评估，不替代 full validation 结论：
+
+| Model | Action Acc | Risk Acc | ADE (m) | FDE (m) | Line-like | Pred Curv | Speed MAE (m/s) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| v5 SFT | 67.00% | 95.50% | 0.8212 | 1.8186 | 39.50% | 0.0821 | N/A |
+| v6 SFT | 64.50% | 96.00% | 0.8573 | 1.9105 | 33.50% | 0.0956 | 1.0217 |
+
+v6 的动作准确率和 ADE/FDE 暂未超过 v5，但近似直线率下降 6 个百分点，转向
+横向位移和预测弯曲度更接近 GT，并且 200 条目标速度全部可解析。当前结论应写为
+“增强动态速度与轨迹形状建模”，不能写成所有指标全面提升。完整 2,115 条评估和
+CARLA 同 seed 对照尚未完成。
 
 ## 离线偏好优化
 

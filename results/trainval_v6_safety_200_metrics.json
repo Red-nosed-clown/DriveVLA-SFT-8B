@@ -1,0 +1,16 @@
+{
+  "model": "qlora_trainval_v6_safety_200",
+  "num_samples": 200,
+  "parse_success_rate": 1.0,
+  "action_accuracy": 0.645,
+  "risk_accuracy": 0.96,
+  "trajectory_valid_rate": 1.0,
+  "ade": 0.8572757125971546,
+  "fde": 1.9105189597441345,
+  "trajectory_metric_samples": 200,
+  "average_reason_length": 27.375,
+  "target_speed_valid_rate": 1.0,
+  "target_speed_mae_mps": 1.0216500000000002,
+  "target_speed_metric_samples": 200,
+  "failure_count": 79
+}

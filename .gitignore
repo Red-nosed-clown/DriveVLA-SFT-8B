@@ -87,6 +87,10 @@ results/carla/**
 results/carla/generalization/**
 !results/carla/generalization/capability_generalization_summary.md
 !results/carla/generalization/capability_generalization_summary.json
+!results/trainval_v6_safety_200_metrics.json
+!results/trainval_v6_safety_200_eval_report.md
+!results/trainval_v6_safety_200_trajectory_geometry.json
+!results/trainval_v6_safety_200_trajectory_geometry.md
 
 # 保留正式训练曲线，不上传 adapter 和 checkpoint。
 !results/qwen3vl_8b_drivevla_qlora/
@@ -133,6 +137,12 @@ results/qwen3vl_8b_drivevla_trainval_v5_history_short/**
 results/qwen3vl_8b_drivevla_trainval_v5_history_full/**
 !results/qwen3vl_8b_drivevla_trainval_v5_history_full/training_loss.png
 !results/qwen3vl_8b_drivevla_trainval_v5_history_full/training_eval_loss.png
+!results/qwen3vl_8b_drivevla_trainval_v6_safety_full/
+results/qwen3vl_8b_drivevla_trainval_v6_safety_full/**
+!results/qwen3vl_8b_drivevla_trainval_v6_safety_full/training_loss.png
+!results/qwen3vl_8b_drivevla_trainval_v6_safety_full/training_eval_loss.png
+!results/qwen3vl_8b_drivevla_trainval_v6_safety_full/train_results.json
+!results/qwen3vl_8b_drivevla_trainval_v6_safety_full/eval_results.json
 !results/qwen3vl_8b_drivevla_v5_dpo_pilot/
 results/qwen3vl_8b_drivevla_v5_dpo_pilot/**
 !results/qwen3vl_8b_drivevla_v5_dpo_pilot/training_loss.png

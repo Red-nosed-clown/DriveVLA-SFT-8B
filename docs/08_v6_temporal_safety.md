@@ -56,7 +56,9 @@ env -u PYTHONPATH PYTHONNOUSERSITE=1 \
 
 ## 训练顺序
 
-2-step QLoRA 冒烟已通过，train loss 为 1.2888。正式训练前仍应先确认 GPU 空闲：
+2-step QLoRA 冒烟已通过，train loss 为 1.2888。正式训练也已完成 3 epoch、
+7,194 step，train/eval loss 分别为 0.2824/0.2797，总耗时约 10 小时 10 分。
+复现实验前仍应先确认 GPU 空闲：
 
 ```bash
 nvidia-smi
