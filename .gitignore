@@ -91,6 +91,10 @@ results/carla/generalization/**
 !results/trainval_v6_safety_200_eval_report.md
 !results/trainval_v6_safety_200_trajectory_geometry.json
 !results/trainval_v6_safety_200_trajectory_geometry.md
+!results/trainval_v6_safety_full_metrics.json
+!results/trainval_v6_safety_full_eval_report.md
+!results/trainval_v6_safety_full_trajectory_geometry.json
+!results/trainval_v6_safety_full_trajectory_geometry.md
 
 # 保留正式训练曲线，不上传 adapter 和 checkpoint。
 !results/qwen3vl_8b_drivevla_qlora/

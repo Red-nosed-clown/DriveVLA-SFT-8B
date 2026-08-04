@@ -58,6 +58,9 @@ env -u PYTHONPATH PYTHONNOUSERSITE=1 \
 
 2-step QLoRA 冒烟已通过，train loss 为 1.2888。正式训练也已完成 3 epoch、
 7,194 step，train/eval loss 分别为 0.2824/0.2797，总耗时约 10 小时 10 分。
+完整 2,115 条验证结果为 Action Accuracy 75.74%、ADE 0.7031 m、FDE 1.5334 m、
+Target Speed MAE 0.8506 m/s，预测近似直线率 41.84%。相对 v5，v6 改善了
+`SLOW_DOWN` 和轨迹形状，但 `TURN_LEFT` 分类和 ADE/FDE 有小幅退化。
 复现实验前仍应先确认 GPU 空闲：
 
 ```bash
