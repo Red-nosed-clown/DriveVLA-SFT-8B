@@ -64,6 +64,8 @@ class MockPlanner:
             parsed,
             time.perf_counter() - started,
             time.monotonic(),
+            input_tokens=0,
+            generated_tokens=0,
         )
 
 
@@ -488,10 +490,15 @@ def run(
     actors: list[Any] = []
     rows: list[dict[str, Any]] = []
     latencies: list[float] = []
+    input_token_counts: list[int] = []
+    generated_token_counts: list[int] = []
     fallback_steps = 0
     fallback_reasons: Counter[str] = Counter()
     action_counts: Counter[str] = Counter()
     next_submission_at_s = 0.0
+    execution_mode = str(config["planner"].get("execution_mode", "async"))
+    if execution_mode not in {"async", "lockstep"}:
+        raise ValueError("planner.execution_mode 只能是 async 或 lockstep")
     replan_interval_s = float(config["planner"].get("replan_interval_s", 0.5))
     traffic_manager = None
     route_tracker = None
@@ -500,11 +507,16 @@ def run(
     previous_location = None
     goal_reached = False
     hard_brake_steps = 0
+    bootstrap_steps = int(config["planner"].get("bootstrap_steps", 0))
+    bootstrap_steps_used = 0
     lead_vehicle = None
     minimum_lead_distance_m = float("inf")
     stopped_for_lead = False
     latest_min_ttc_s = None
     observed_ttc_values: list[float] = []
+    latest_forward_hazard = False
+    behavior_shield_interventions = 0
+    shield_cfg = config.get("behavior_shield", {})
 
     try:
         print("[闭环] 正在生成 ego、RGB 相机和碰撞传感器", flush=True)
@@ -537,6 +549,18 @@ def run(
                 f"速度={scenario.get('lead_vehicle_speed_mps', 0.0)}m/s",
                 flush=True,
             )
+        # 新生成的车辆会从出生点轻微下落。先保持制动并推进若干物理帧，
+        # 防止竖直落地过程污染首段历史运动和碰撞判定。
+        settle_steps = int(simulation.get("spawn_settle_steps", 0))
+        if settle_steps > 0:
+            ego.apply_control(
+                command_to_vehicle_control(controller.emergency_stop("spawn_settle"))
+            )
+            for _ in range(settle_steps):
+                update_lead_vehicle(lead_vehicle, config)
+                world.tick()
+            controller.reset()
+            print(f"[闭环] 车辆落地稳定完成：{settle_steps} steps", flush=True)
         print("[闭环] actor 和 Vulkan 缓冲初始化完成", flush=True)
         cached_planner = planner_cache.get("planner") if planner_cache is not None else None
         if cached_planner is None:
@@ -550,7 +574,8 @@ def run(
         else:
             planner = cached_planner
             print("[闭环] 复用已加载的规划器", flush=True)
-        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="qwen-planner")
+        if execution_mode == "async":
+            executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="qwen-planner")
         # 模型加载可能持续数秒，加载前的相机帧已经失去规划价值。清空队列后，
         # 主循环只会使用下一次同步 tick 新采集的图像。
         while True:
@@ -594,6 +619,8 @@ def run(
                 try:
                     latest_prediction, latest_capture_time_s = future.result()
                     latencies.append(latest_prediction.latency_s)
+                    input_token_counts.append(latest_prediction.input_tokens)
+                    generated_token_counts.append(latest_prediction.generated_tokens)
                     action_counts[str(latest_prediction.parsed.get("action", "UNKNOWN"))] += 1
                     # 给新轨迹短暂的执行时间，避免下一张图仍是启动前的静止状态。
                     next_submission_at_s = time.monotonic() + replan_interval_s
@@ -602,7 +629,11 @@ def run(
                     latest_prediction = None
                 future = None
 
-            if future is None and time.monotonic() >= next_submission_at_s:
+            if (
+                step >= bootstrap_steps
+                and future is None
+                and time.monotonic() >= next_submission_at_s
+            ):
                 try:
                     image, captured_at_s = image_queue.get_nowait()
                 except queue.Empty:
@@ -614,6 +645,15 @@ def run(
                         float(actor.ttc_s) for actor in nearby if actor.ttc_s is not None
                     ]
                     latest_min_ttc_s = min(current_ttc_values) if current_ttc_values else None
+                    latest_forward_hazard = any(
+                        0.0 < float(actor.forward_m) <= float(
+                            shield_cfg.get("forward_hazard_distance_m", 20.0)
+                        )
+                        and abs(float(actor.lateral_m)) <= float(
+                            shield_cfg.get("forward_hazard_lateral_m", 3.0)
+                        )
+                        for actor in nearby
+                    )
                     observed_ttc_values.extend(current_ttc_values)
                     if str(scenario.get("name", "")).startswith("intersection_"):
                         command_text = {
@@ -636,16 +676,51 @@ def run(
                             str(config["planner"].get("prompt_version", "v5")) == "v6_safety"
                         ),
                     )
-                    future = executor.submit(
-                        predict_with_capture_time,
-                        planner,
-                        image,
-                        prompt,
-                        captured_at_s,
-                    )
+                    if execution_mode == "async":
+                        future = executor.submit(
+                            predict_with_capture_time,
+                            planner,
+                            image,
+                            prompt,
+                            captured_at_s,
+                        )
+                    else:
+                        # Lockstep 用于测量模型决策能力：推理期间同步仿真没有推进，
+                        # 因此轨迹从生成完成时开始计龄；推理耗时仍原样写入报告。
+                        try:
+                            latest_prediction = planner.predict(image, prompt)
+                            latest_capture_time_s = time.monotonic()
+                            latencies.append(latest_prediction.latency_s)
+                            input_token_counts.append(latest_prediction.input_tokens)
+                            generated_token_counts.append(latest_prediction.generated_tokens)
+                            action_counts[
+                                str(latest_prediction.parsed.get("action", "UNKNOWN"))
+                            ] += 1
+                            next_submission_at_s = time.monotonic() + replan_interval_s
+                        except Exception as exc:
+                            print(f"[闭环] 推理失败：{exc}", file=sys.stderr, flush=True)
+                            latest_prediction = None
+                            next_submission_at_s = time.monotonic() + replan_interval_s
 
             motion = observer.ego_motion()
-            if latest_prediction is None:
+            if step < bootstrap_steps:
+                # nuScenes 监督数据描述的是已经处于行驶过程中的车辆，缺少从静止
+                # 起步的导航意图。先沿车道建立运动历史，再交给 VLA 闭环接管。
+                command = replace(
+                    run_route_fallback(
+                        controller,
+                        route_tracker,
+                        ego,
+                        motion.current_speed_mps,
+                        fixed_dt,
+                    ),
+                    fallback=False,
+                    reason="bootstrap",
+                )
+                bootstrap_steps_used += 1
+                prediction_age = None
+                parsed = None
+            elif latest_prediction is None:
                 command = controller.emergency_stop("waiting_for_prediction")
                 prediction_age = None
                 parsed = None
@@ -662,6 +737,33 @@ def run(
                         motion.current_speed_mps,
                         fixed_dt,
                     )
+                elif (
+                    bool(shield_cfg.get("enabled", False))
+                    and not latest_forward_hazard
+                    and (
+                        str(parsed.get("action")) == "STOP"
+                        or (
+                            str(parsed.get("action")) == "SLOW_DOWN"
+                            and isinstance(parsed.get("target_speed_mps"), (int, float))
+                            and float(parsed["target_speed_mps"])
+                            < float(shield_cfg.get("minimum_cruise_speed_mps", 1.5))
+                        )
+                    )
+                ):
+                    # 保留原始模型预测，只在执行层阻止无前向障碍的减速自锁。
+                    # 每次干预单独计数，不能把 shield 后结果写成纯 VLA 能力。
+                    command = replace(
+                        run_route_fallback(
+                            controller,
+                            route_tracker,
+                            ego,
+                            motion.current_speed_mps,
+                            fixed_dt,
+                        ),
+                        fallback=False,
+                        reason="behavior_shield_no_hazard",
+                    )
+                    behavior_shield_interventions += 1
                 else:
                     command = controller.run_step(
                         parsed["trajectory"],
@@ -775,6 +877,12 @@ def run(
             "ttc_observation_count": len(observed_ttc_values),
             "fallback_reasons": dict(fallback_reasons),
             "prediction_count": len(latencies),
+            "execution_mode": execution_mode,
+            "bootstrap_steps": bootstrap_steps_used,
+            "bootstrap_duration_s": bootstrap_steps_used * fixed_dt,
+            "behavior_shield_enabled": bool(shield_cfg.get("enabled", False)),
+            "behavior_shield_interventions": behavior_shield_interventions,
+            "behavior_shield_rate": behavior_shield_interventions / max(actual_steps, 1),
             "action_counts": dict(action_counts),
             # 这是 episode 级粗指标；尚未限定“车辆进入路口决策区”的时间窗。
             "expected_route_action": expected_action,
@@ -787,6 +895,15 @@ def run(
             "latency_mean_s": statistics.fmean(latencies) if latencies else None,
             "latency_p50_s": percentile(latencies, 0.50),
             "latency_p95_s": percentile(latencies, 0.95),
+            "input_tokens_mean": statistics.fmean(input_token_counts)
+            if input_token_counts
+            else None,
+            "generated_tokens_mean": statistics.fmean(generated_token_counts)
+            if generated_token_counts
+            else None,
+            "generated_tokens_max": max(generated_token_counts)
+            if generated_token_counts
+            else None,
         }
         with output_path.open("w", encoding="utf-8") as file:
             for row in rows:

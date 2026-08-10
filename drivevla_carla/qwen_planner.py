@@ -17,6 +17,8 @@ class PlannerPrediction:
     parsed: dict[str, Any]
     latency_s: float
     generated_at_s: float
+    input_tokens: int = 0
+    generated_tokens: int = 0
 
 
 class QwenDrivePlanner:
@@ -89,6 +91,7 @@ class QwenDrivePlanner:
             )
         latency = time.perf_counter() - started
         prompt_length = inputs["input_ids"].shape[1]
+        generated_tokens = generated.shape[1] - prompt_length
         raw_text = self.processor.batch_decode(
             generated[:, prompt_length:],
             skip_special_tokens=True,
@@ -104,4 +107,6 @@ class QwenDrivePlanner:
             parsed=parse_model_output(raw_text),
             latency_s=latency,
             generated_at_s=time.monotonic(),
+            input_tokens=prompt_length,
+            generated_tokens=generated_tokens,
         )

@@ -42,6 +42,10 @@ data/drivevla_dpo/*/**
 !data/drivevla_dpo/*/preference_report.json
 !data/drivevla_dpo/*/preference_report.md
 
+# VERL parquet 包含本机图片绝对路径，Hydra/Ray 运行输出也只保留在本地。
+data/drivevla_verl/
+outputs/
+
 # LLaMA-Factory 按 README 中固定的提交单独克隆，不嵌入本仓库。
 third_party/LLaMA-Factory/
 

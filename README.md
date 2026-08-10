@@ -6,12 +6,13 @@ Vision-Language-Action 微调项目。项目先用本地 `nuScenes-mini` 跑通�
 推理、输出解析、ADE/FDE、轨迹几何分析、可视化和失败分析由项目自行实现；
 模型输出还接入 CARLA Pure Pursuit/PID 控制闭环，用于验证离线指标之外的安全问题。
 
-当前工程包含四条可复现链路：
+当前工程包含五条可复现链路：
 
 1. nuScenes scene 级数据构建与弱监督标签生成；
 2. Qwen3-VL-8B 单卡 4bit QLoRA SFT 与 DPO；
 3. 结构化输出、离散动作、连续轨迹和目标速度评估；
 4. CARLA 异步规划、轨迹控制、fallback 与多 seed 能力场景评测。
+5. 从 v6 SFT adapter 出发的 VERL GRPO 离线规则奖励后训练 smoke。
 
 ## 项目动机
 
@@ -364,6 +365,24 @@ Action Accuracy 和 Risk Accuracy 均记为 0；这正是结构化 SFT 带来的
 - [trainval 完整评估摘要](results/trainval_finetuned_full_summary.md)
 - [trainval 轨迹几何分析](results/trainval_finetuned_full_trajectory_geometry.md)
 
+## VERL GRPO 后训练
+
+项目已将 v6 SFT rank-16 adapter 直接接入 VERL，构建不泄漏 ground truth 的
+多模态 parquet，并实现格式、Action/Risk、ADE/FDE、目标速度、轨迹几何及安全
+一致性组成的离线规则奖励。单卡 smoke 使用 GRPO `n=2`、FSDP2 与 vLLM 共置，
+已真实完成一次 `rollout -> reward -> advantage -> LoRA update -> weight sync`，
+退出码为 0，单步耗时 20.96 秒。
+
+后续 8-step 短训已成功保存并导出标准 PEFT adapter。固定 8 条验证样本上，GRPO
+相对 SFT 的 ADE/FDE 从 `0.9936/2.1551m` 降至 `0.8890/1.9112m`，速度 MAE
+从 `1.0500` 降至 `0.6450m/s`；但 Action Accuracy 从 `62.50%` 降至
+`50.00%`。由于样本很小且动作指标退化，该 adapter 只作为后训练 pilot，不替代
+v6 SFT。
+
+该结果证明后训练工程闭环可运行，不代表策略指标已经优于 SFT。完整命令、奖励权重、
+资源约束和 VERL 兼容补丁见
+[`docs/09_verl_grpo.md`](docs/09_verl_grpo.md)。
+
 ## CARLA 闭环评测
 
 项目将结构化六点轨迹接入 Pure Pursuit 横向控制和 PID 纵向控制，并实现异步
@@ -415,20 +434,22 @@ adapter。
 - [DPO 离线偏好优化](docs/06_dpo_preference_optimization.md)
 - [CARLA 闭环接入](docs/07_carla_closed_loop.md)
 - [v6 时序安全输入](docs/08_v6_temporal_safety.md)
+- [VERL GRPO 教学型闭环](docs/09_verl_grpo.md)
 
 ## 项目边界
 
 nuScenes-mini 只有 10 个 scene，仅用于早期工程链路验证；项目的正式训练与主要
 离线结论来自完整 nuScenes trainval 阶段。两阶段主要使用单目 `CAM_FRONT`，
 且本地 full 数据缺少部分图像，因此不能将结果表述为使用了全部 nuScenes 传感器
-和全部可用样本。CARLA 实验属于仿真闭环验证，目前只覆盖单一地图、天气和有限
-场景参数，不代表真实车辆性能或完整域泛化。
+和全部可用样本。VERL smoke 使用离线规则奖励，只验证一次 LoRA 更新，不等同于
+环境交互强化学习或效果提升。CARLA 实验属于仿真闭环验证，目前只覆盖单一地图、
+天气和有限场景参数，不代表真实车辆性能或完整域泛化。
 
 ## 后续方向
 
-- 完成 v6 full trainval 评估，报告 Action/Risk、ADE/FDE 与 Target Speed MAE；
-- 在完全相同 CARLA 场景和 seed 下对比 v5/v6 的碰撞率、最小 TTC 和 fallback；
-- 基于 v6 闭环失败样本重新构造 chosen/rejected，再评估 DPO 是否改善独立安全指标；
+- 将固定 GRPO 验证集扩展到 100–200 条，并调整 Action/格式奖励和学习率后复测；
+- 用 CARLA 失败日志构造更贴近闭环安全的奖励或偏好样本，避免只拟合 nuScenes GT；
+- 在完全相同 CARLA 场景和 seed 下比较 SFT/GRPO 的碰撞率、最小 TTC 和 fallback；
 - 引入地图/车道中心线或三前向相机，改善弯道轨迹形状；
 - 扩展 CARLA 多地图、多天气和参数化前车场景，分别报告纯 VLA 输出、fallback
   使用率与最终闭环指标。

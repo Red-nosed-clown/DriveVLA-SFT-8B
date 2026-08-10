@@ -98,6 +98,9 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "run_count": len(rows),
         "scenario_count": len(grouped),
+        "execution_modes": sorted(
+            {str(row.get("execution_mode", "legacy_async")) for row in rows}
+        ),
         "unique_seeds": sorted({row["seed"] for row in rows if row["seed"] is not None}),
         "collision_runs": sum(bool(row.get("collision_occurred")) for row in rows),
         "collision_run_rate": statistics.fmean(
@@ -107,6 +110,12 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "fallback_rate_mean": statistics.fmean(row["fallback_rate"] for row in rows),
         "hard_brake_rate_mean": statistics.fmean(row["hard_brake_rate"] for row in rows),
         "latency_mean_s": statistics.fmean(row["latency_mean_s"] for row in rows),
+        "bootstrap_duration_mean_s": statistics.fmean(
+            float(row.get("bootstrap_duration_s", 0.0)) for row in rows
+        ),
+        "behavior_shield_rate_mean": statistics.fmean(
+            float(row.get("behavior_shield_rate", 0.0)) for row in rows
+        ),
         "action_counts": dict(actions),
         "scenarios": scenario_metrics,
     }
@@ -119,11 +128,14 @@ def render_markdown(rows: list[dict[str, Any]], summary: dict[str, Any]) -> str:
         "",
         f"- 有效运行：{summary['run_count']}",
         f"- 场景数：{summary['scenario_count']}",
+        f"- 执行协议：{summary['execution_modes']}",
         f"- Seed：{summary['unique_seeds']}",
         f"- 发生碰撞的运行：{summary['collision_runs']} / {summary['run_count']} "
         f"({percentage(summary['collision_run_rate'])})",
         f"- 车道侵入事件：{summary['total_lane_invasions']}",
         f"- 平均推理延迟：{number(summary['latency_mean_s'])} s",
+        f"- 平均冷启动辅助：{number(summary['bootstrap_duration_mean_s'])} s",
+        f"- 平均 behavior shield 干预：{percentage(summary['behavior_shield_rate_mean'])}",
         f"- 平均 fallback 占比：{percentage(summary['fallback_rate_mean'])}",
         "",
         "## 单次结果",
