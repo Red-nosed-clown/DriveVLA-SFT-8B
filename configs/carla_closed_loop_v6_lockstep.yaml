@@ -43,18 +43,16 @@ traffic:
   following_distance_m: 2.5
 
 planner:
-  # CARLA 在线推理使用合并模型，避免未合并 LoRA 带来的逐层计算开销。
   model_name_or_path: results/qwen3vl_8b_drivevla_v6_safety_sft_merged
   adapter_path: null
   load_in_4bit: true
   gpu_memory_fraction: 0.55
   image_max_pixels: 131072
   max_new_tokens: 128
-  # async 推进真实时间，用于评估单卡在线部署延迟与过期轨迹比例。
-  execution_mode: async
+  # lockstep 在推理期间暂停同步仿真，只用于测量模型闭环决策能力。
+  execution_mode: lockstep
   bootstrap_steps: 30
-  replan_interval_s: 0.1
-  # v6 adapter 训练时包含目标相对速度、TTC 和 target_speed_mps。
+  replan_interval_s: 0.5
   prompt_version: v6_safety
 
 camera:
@@ -83,7 +81,7 @@ controller:
   max_target_speed_mps: 12.0
   slow_down_speed_mps: 4.0
   prediction_timeout_s: 5.0
-  # CARLA 以 20 Hz 控制时，默认微分项会放大相邻帧速度变化并造成油门/制动振荡。
+  # 与 async 协议使用同一组平滑纵向参数，保证两种协议可直接比较。
   speed_kp: 0.35
   speed_ki: 0.02
   speed_kd: 0.0
@@ -93,3 +91,10 @@ safety:
   max_segment_m: 15.0
   backward_tolerance_m: 0.5
   emergency_brake: 1.0
+
+# 该层只阻止“无前向障碍却停车”的闭环自锁，原始模型动作仍写入日志。
+behavior_shield:
+  enabled: true
+  forward_hazard_distance_m: 20.0
+  forward_hazard_lateral_m: 3.0
+  minimum_cruise_speed_mps: 1.5

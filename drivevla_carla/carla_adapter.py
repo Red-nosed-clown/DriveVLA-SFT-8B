@@ -39,9 +39,8 @@ def command_to_vehicle_control(command: ControlCommand) -> Any:
 
 
 def velocity_to_speed_mps(velocity: Any) -> float:
-    """把 CARLA 三维速度向量转换成标量速度，单位为 m/s。"""
+    """计算车辆在路面平面内的速度，排除出生落地时的竖直速度。"""
     return math.sqrt(
         float(velocity.x) ** 2
         + float(velocity.y) ** 2
-        + float(velocity.z) ** 2
     )

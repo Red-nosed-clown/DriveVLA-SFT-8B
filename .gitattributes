@@ -1,0 +1,2 @@
+# Patch 文件中的单空格是 unified diff 的空白上下文标记，不视为尾随空格。
+*.patch whitespace=-blank-at-eol

@@ -239,12 +239,14 @@ def percent(value: float) -> str:
     return f"{value * 100:.2f}%"
 
 
-def build_markdown(report: dict[str, Any]) -> str:
+def build_markdown(
+    report: dict[str, Any], baseline_label: str = "SFT", candidate_label: str = "DPO"
+) -> str:
     """生成便于提交和答辩的 Markdown 对比报告。"""
     baseline = report["baseline_metrics"]
     candidate = report["candidate_metrics"]
     lines = [
-        "# DriveVLA SFT 与 DPO 对比报告",
+        f"# DriveVLA {baseline_label} 与 {candidate_label} 对比报告",
         "",
         f"- 样本数：{report['num_samples']}",
         f"- Baseline：`{report['baseline_model']}`",
@@ -252,7 +254,7 @@ def build_markdown(report: dict[str, Any]) -> str:
         "",
         "## 总体指标",
         "",
-        "| Metric | SFT | DPO | DPO - SFT |",
+        f"| Metric | {baseline_label} | {candidate_label} | {candidate_label} - {baseline_label} |",
         "|---|---:|---:|---:|",
     ]
     for label, key, is_percent in (
@@ -277,7 +279,9 @@ def build_markdown(report: dict[str, Any]) -> str:
             "",
             "## 分动作结果",
             "",
-            "| Action | SFT F1 | DPO F1 | SFT ADE | DPO ADE | SFT FDE | DPO FDE |",
+            f"| Action | {baseline_label} F1 | {candidate_label} F1 | "
+            f"{baseline_label} ADE | {candidate_label} ADE | "
+            f"{baseline_label} FDE | {candidate_label} FDE |",
             "|---|---:|---:|---:|---:|---:|---:|",
         ]
     )
@@ -299,9 +303,9 @@ def build_markdown(report: dict[str, Any]) -> str:
             "",
             "## 成对轨迹比较",
             "",
-            f"- DPO 改善：{paired['candidate_wins']} 条",
+            f"- {candidate_label} 改善：{paired['candidate_wins']} 条",
             f"- 基本持平：{paired['ties']} 条",
-            f"- DPO 退化：{paired['candidate_losses']} 条",
+            f"- {candidate_label} 退化：{paired['candidate_losses']} 条",
             f"- 平均 ADE 改善：{paired['mean_ade_improvement_m']:.4f} m",
             "",
             "## 判定",
@@ -312,9 +316,9 @@ def build_markdown(report: dict[str, Any]) -> str:
     ade_delta = report["candidate_minus_baseline"].get("ade", 0.0)
     fde_delta = report["candidate_minus_baseline"].get("fde", 0.0)
     if action_delta >= 0 and ade_delta <= 0 and fde_delta <= 0:
-        lines.append("- DPO 在动作与轨迹主指标上没有出现相互牺牲，可以作为有效改进版本。")
+        lines.append(f"- {candidate_label} 在动作与轨迹主指标上没有出现相互牺牲，可以作为有效改进版本。")
     else:
-        lines.append("- DPO 至少有一项主指标退化，需要结合分动作结果调整偏好数据配比。")
+        lines.append(f"- {candidate_label} 至少有一项主指标退化，需要结合分动作结果调整训练数据或奖励。")
     return "\n".join(lines) + "\n"
 
 
@@ -333,8 +337,9 @@ def run(args: argparse.Namespace) -> None:
         json.dumps(report, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    output_md.write_text(build_markdown(report), encoding="utf-8")
-    print(build_markdown(report))
+    markdown = build_markdown(report, args.baseline_label, args.candidate_label)
+    output_md.write_text(markdown, encoding="utf-8")
+    print(markdown)
 
 
 def parse_args() -> argparse.Namespace:
@@ -345,6 +350,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-json", required=True)
     parser.add_argument("--output-md", required=True)
     parser.add_argument("--ade-tolerance", type=float, default=0.01)
+    parser.add_argument("--baseline-label", default="SFT")
+    parser.add_argument("--candidate-label", default="DPO")
     return parser.parse_args()
 
 

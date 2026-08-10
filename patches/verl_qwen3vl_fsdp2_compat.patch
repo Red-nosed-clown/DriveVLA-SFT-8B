@@ -1,0 +1,49 @@
+diff --git a/verl/utils/tensordict_utils.py b/verl/utils/tensordict_utils.py
+index 91d82b1..54f0a34 100644
+--- a/verl/utils/tensordict_utils.py
++++ b/verl/utils/tensordict_utils.py
+@@ -912,7 +912,15 @@ def maybe_fix_3d_position_ids(data: TensorDict):
+     # will incur indexing error for ragged tensor. This only happens when using 3D position ids in VLMs.
+     # This is likely a bug in tensordict. As a workaround, we manually set _ragged_index.
+     if "position_ids" in data.keys() and data["position_ids"].dim() == 3 and data["position_ids"].is_nested:
+-        data["position_ids"]._ragged_idx = 2
++        position_ids = data["position_ids"]
++        if position_ids._ragged_idx != 2:
++            # PyTorch 2.11 反序列化后 ragged_idx 和 offsets 会落在错误的 mRoPE 轴。
++            # 按 token 维重建，再转回模型需要的 (mRoPE 轴, L)，不假定轴数是 3 还是 4。
++            # 此时 unbind 会读取错误的 ragged_idx，因此直接按原始 values/offsets 切分每条样本。
++            values = position_ids.values()
++            offsets = position_ids.offsets().tolist()
++            rows = [values[:, start:end].transpose(0, 1) for start, end in zip(offsets, offsets[1:])]
++            data["position_ids"] = torch.nested.as_nested_tensor(rows, layout=torch.jagged).transpose(1, 2)
+ 
+ 
+ def list_of_dict_to_tensordict(list_of_dicts: list[dict[str, Any]]) -> TensorDict:
+diff --git a/verl/workers/engine/fsdp/transformer_impl.py b/verl/workers/engine/fsdp/transformer_impl.py
+index 0311b22..a3880a2 100644
+--- a/verl/workers/engine/fsdp/transformer_impl.py
++++ b/verl/workers/engine/fsdp/transformer_impl.py
+@@ -929,7 +929,9 @@ class FSDPEngine(BaseEngine):
+         # round trip is only needed for FSDP1 (state_dict unshards on-device) and LoRA
+         # (adapter merge does real weight math on the module).
+         _is_peft = hasattr(getattr(self.module, "_fsdp_wrapped_module", self.module), "peft_config")
+-        _skip_staging = fsdp_version(self.module) == 2 and not _is_peft
++        # FSDP2 的 layered_summon 会逐层收集 LoRA 参数，无需先将整个 PEFT 模型搬回 GPU。
++        # 单卡共置 vLLM 时整模 staging 会同时保留两份 8B 权重并触发显存不足。
++        _skip_staging = fsdp_version(self.module) == 2 and (not _is_peft or layered_summon)
+         if not self._uses_fsdp2_cpu_offload_policy and not _skip_staging:
+             load_fsdp_model_to_gpu(self.module)
+ 
+@@ -1208,9 +1210,10 @@ class FSDPEngineWithLMHead(FSDPEngine):
+                 )
+ 
+                 if position_ids.dim() == 3:
++                    mrope_dims = position_ids.values().shape[0]
+                     position_ids = torch.nested.to_padded_tensor(
+-                        position_ids, padding=0, output_size=(batch_size, 4, max_seq_len)
+-                    ).transpose(0, 1)  # (4, batch_size, max_seq_len)
++                        position_ids, padding=0, output_size=(batch_size, mrope_dims, max_seq_len)
++                    ).transpose(0, 1)  # (mRoPE 轴, batch_size, max_seq_len)
+                 else:
+                     position_ids = torch.nested.to_padded_tensor(
+                         position_ids, padding=0, output_size=(batch_size, max_seq_len)

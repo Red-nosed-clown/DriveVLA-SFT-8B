@@ -19,10 +19,16 @@ from drivevla_carla.prompt_builder import (
     build_online_prompt,
 )
 from drivevla_carla.scene_observer import normalize_angle_deg, world_delta_to_ego
+from drivevla_carla.carla_adapter import velocity_to_speed_mps
 from drivevla_carla.route_metrics import RoutePoint, RouteTracker, choose_branch
 
 
 class WaypointControllerTest(unittest.TestCase):
+    def test_vehicle_speed_ignores_vertical_spawn_velocity(self) -> None:
+        """车辆落地速度不能被误认为沿道路行驶速度。"""
+        velocity = type("Velocity", (), {"x": 3.0, "y": 4.0, "z": 12.0})()
+        self.assertAlmostEqual(velocity_to_speed_mps(velocity), 5.0)
+
     """覆盖方向转换、纵向控制和安全兜底。"""
 
     def setUp(self) -> None:
